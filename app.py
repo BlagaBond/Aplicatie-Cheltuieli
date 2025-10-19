@@ -50,6 +50,8 @@ def create_user(username: str, password: str):
     """
     Creează un nou utilizator în tabela users_auth.
 
+
+
     Supabase nu returnează corp JSON în mod implicit la un INSERT, așa că
     apelul .json() ar produce JSONDecodeError. Adăugăm headerul Prefer:
     return=representation pentru a primi rândul inserat și verificăm
