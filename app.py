@@ -70,7 +70,7 @@ def login_view():
                 st.error("User sau parolă greșită")
             else:
                 st.session_state["user"] = {"id": user["id"], "username": user["username"]}
-                st.experimental_rerun()
+                st.rerun()
     with tab2:
         nu = st.text_input("Username nou", key="new_u")
         np = st.text_input("Parolă nouă", type="password", key="new_p")
