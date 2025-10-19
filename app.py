@@ -28,8 +28,14 @@ import numpy as np
 import pytesseract
 
 # --------------- USER AUTH AND LOGIN ---------------
+# --------------- USER AUTH AND LOGIN ---------------
 import os
 import requests
+from pathlib import Path  # <- asigură-te că importul există
+
+# --- CONSTANTE & PATHS DE BAZĂ (trebuie să fie DEFINITE ÎNAINTE de init_user_csv!) ---
+BASE = Path(__file__).resolve().parent
+CSV_PATH = None  # va fi setat per-user după login
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
@@ -49,13 +55,8 @@ def get_user_by_username(username: str):
 def create_user(username: str, password: str):
     """
     Creează un nou utilizator în tabela users_auth.
-
-
-
     Supabase nu returnează corp JSON în mod implicit la un INSERT, așa că
-    apelul .json() ar produce JSONDecodeError. Adăugăm headerul Prefer:
-    return=representation pentru a primi rândul inserat și verificăm
-    dacă răspunsul are conținut înainte de a-l decoda.
+    adăugăm headerul Prefer:return=representation și verificăm conținutul.
     """
     url = f"{SUPABASE_URL}/rest/v1/users_auth"
     payload = {"username": username, "password": password}
@@ -64,16 +65,13 @@ def create_user(username: str, password: str):
         headers={
             **HEADERS,
             "Content-Type": "application/json",
-            # solicită ca Supabase să returneze rândul inserat
             "Prefer": "return=representation",
         },
         json=payload,
         timeout=10,
     )
     res.raise_for_status()
-    # Dacă răspunsul conține date, returnăm JSON; altfel returnăm None
     return res.json() if res.content else None
-
 
 def login_view():
     st.title("Autentificare")
@@ -106,9 +104,9 @@ def require_login():
         st.stop()
     return st.session_state["user"]
 
-# call login to ensure user is authenticated
+# --- LOGIN + CSV per user ---
 user = require_login()
-# Initialize per-user CSV
+
 def init_user_csv(current_user: dict) -> None:
     """
     Fiecare utilizator își are fișierul lui: transactions_<user_id>.csv
@@ -122,34 +120,8 @@ def init_user_csv(current_user: dict) -> None:
 
 init_user_csv(user)
 
-def init_user_csv(current_user: dict) -> None:
-    global CSV_PATH
-    if current_user and current_user.get("id"):
-        CSV_PATH = BASE / f"transactions_{current_user['id']}.csv"
-    else:
-        CSV_PATH = None
-
-init_user_csv(user)
-
-
 # Greeting for logged in user
 st.write(f"Bun venit, {user['username']}!")
-
-from PIL import Image
-import cv2
-import fitz  # PyMuPDF
-
-# Charts
-import altair as alt
-
-# ML deps
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-import joblib
-
-# Dacă Tesseract nu e în PATH, decomentează linia de mai jos:
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 # ================== SETUP & PATHS ==================
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
@@ -495,8 +467,8 @@ def auto_category_for_item(name: str, cats_dict: dict) -> str:
 
 def extract_line_items(text: str, total_hint: float | None = None):
     """
-    Extrage iteme, ignoră meta-liniile (TOTAL/Card/Apple Pay...), păstrează Delivery/Service fee ca cheltuieli
-    și Discount ca linii pozitive (se semnează corect la salvare).
+    Extrage iteme, ignoră meta-liniile (TOTAL/Card/Apple Pay...),
+    păstrează Delivery/Service fee ca cheltuieli și tratează discount ca venit.
     """
     def norm(s: str) -> str:
         return re.sub(r"\s+", " ", s).strip()
@@ -508,32 +480,32 @@ def extract_line_items(text: str, total_hint: float | None = None):
     def strip_amount(ln: str) -> str:
         return re.sub(r"(-?\d+[.,]\d{2})\s*[A-Z]?\s*$", "", ln).strip(" .:-")
 
-   def parse_qty_unit_price(ln: str):
-    """
-    Prinde tipare precum:
-    - 2 x 4,50
-    - 1 buc x 3.00 3,00
-    - 3*2.50 7,50
-    Returnează (qty, unit_price, subtotal). Dacă subtotalul nu e în linie, îl calculează.
-    """
-    m = re.search(
-        r"(?P<qty>\d+(?:[.,]\d+)?)\s*"
-        r"(?:buc|kg|l|rola|pck|pz|pcs)?\s*"
-        r"[x×*]\s*"
-        r"(?P<unit>\d+[.,]\d{2})"
-        r"(?:\s+(?P<subtotal>\d+[.,]\d{2}))?",
-        ln,
-        re.I,
-    )
-    if not m:
-        return None
-    qty = float(m.group("qty").replace(",", "."))
-    unit_price = float(m.group("unit").replace(",", "."))
-    if m.group("subtotal"):
-        subtotal = float(m.group("subtotal").replace(",", "."))
-    else:
-        subtotal = round(qty * unit_price, 2)
-    return qty, unit_price, subtotal
+    def parse_qty_unit_price(ln: str):
+        """
+        Prinde tipare:
+        - 2 x 4,50
+        - 1 buc x 3.00 3,00
+        - 3*2.50 7,50
+        Returnează (qty, unit_price, subtotal). Dacă subtotalul nu e în linie, îl calculează.
+        """
+        m = re.search(
+            r"(?P<qty>\d+(?:[.,]\d+)?)\s*"
+            r"(?:buc|kg|l|rola|pck|pz|pcs)?\s*"
+            r"[x×*]\s*"
+            r"(?P<unit>\d+[.,]\d{2})"
+            r"(?:\s+(?P<subtotal>\d+[.,]\d{2}))?",
+            ln,
+            re.I,
+        )
+        if not m:
+            return None
+        qty = float(m.group("qty").replace(",", "."))
+        unit_price = float(m.group("unit").replace(",", "."))
+        if m.group("subtotal"):
+            subtotal = float(m.group("subtotal").replace(",", "."))
+        else:
+            subtotal = round(qty * unit_price, 2)
+        return qty, unit_price, subtotal
 
     def looks_meta(ln: str) -> bool:
         return bool(META_RE.search(ln))
@@ -553,36 +525,40 @@ def extract_line_items(text: str, total_hint: float | None = None):
                 i += 1
                 continue
 
-        # stop înainte de secțiunile card terminal
+        # Stop înainte de secțiunile card terminal
         if re.search(r"\b(DETALII\s+TRANZACTI|TERMINAL|SUMA\s)\b", ln, re.I):
             break
 
         if looks_meta(ln) or re.search(r"\bTOTAL\b", ln, re.I):
-            i += 1; continue
+            i += 1
+            continue
 
         if ONLY_QTY_LINE.match(ln):
-            
-            i += 1; continue
+            i += 1
+            continue
 
         amt = amount_at_end(ln)
         qty_info = parse_qty_unit_price(ln)
 
+        # nu confunda o linie cu TOTAL-ul general
         if (amt is not None) and (total_hint is not None) and (abs(amt - float(total_hint)) <= 0.01):
-            i += 1; continue
+            i += 1
+            continue
 
         if qty_info:
             qty, unit_price, subtotal = qty_info
-                # Dacă la capătul liniei există un număr și e ≈ subtotalul,
-    # considerăm că articolul e complet pe același rând.
+
+            # Fallback: articol complet pe același rând (ex: "2 x 3,50 7,00")
             if amt is not None and abs(amt - subtotal) <= 0.05:
-            name_candidate = strip_amount(ln)
-            if not re.search(r"\b(total|tva|card|apple|google|visa|mastercard|rest|ramburs)\b", name_candidate, re.I) and len(name_candidate) >= 2:
-            items.append({"name": name_candidate, "amount": subtotal})
-            i += 1
-            continue
+                name_candidate = strip_amount(ln)
+                if not re.search(r"\b(total|tva|card|apple|google|visa|mastercard|rest|ramburs)\b", name_candidate, re.I) and len(name_candidate) >= 2:
+                    items.append({"name": name_candidate, "amount": subtotal})
+                    i += 1
+                    continue
+
+            # Încearcă rândul următor pentru denumire/subtotal
             if i + 1 < len(lines):
                 nxt = lines[i + 1]
-                
                 if not looks_meta(nxt):
                     nxt_amt = amount_at_end(nxt)
                     if nxt_amt is not None and abs(nxt_amt - subtotal) <= 0.05:
@@ -593,9 +569,12 @@ def extract_line_items(text: str, total_hint: float | None = None):
                                 items.append({"name": name, "amount": subtotal})
                             else:
                                 items.append({"name": name, "amount": subtotal})
-                            i += 2; continue
-            i += 1; continue
+                            i += 2
+                            continue
+            i += 1
+            continue
 
+        # fallback simplu: "Nume produs .... 12,34"
         if amt is not None:
             name_candidate = strip_amount(ln)
             if not re.search(r"\b(total|tva|card|ing)\b", name_candidate, re.I) and len(name_candidate) >= 2:
@@ -613,7 +592,6 @@ def extract_line_items(text: str, total_hint: float | None = None):
         deduped = [x for x in deduped if abs(x["amount"] - float(total_hint)) > 0.01]
 
     return deduped
-
 # ================== UI ==================
 st.title("💼 Budget App — OCR + AI (categorii & discount)")
 tabs = st.tabs(["🧾 Cheltuieli", "💰 Venituri", "📊 Dashboard", "📥 Import", "🧹 Editare tranzacții"])
