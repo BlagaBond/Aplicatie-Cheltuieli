@@ -109,13 +109,25 @@ def require_login():
 # call login to ensure user is authenticated
 user = require_login()
 # Initialize per-user CSV
+def init_user_csv(current_user: dict) -> None:
+    """
+    Fiecare utilizator își are fișierul lui: transactions_<user_id>.csv
+    Utilizator nou = fișier nou, gol.
+    """
+    global CSV_PATH
+    if current_user and current_user.get("id"):
+        CSV_PATH = BASE / f"transactions_{current_user['id']}.csv"
+    else:
+        CSV_PATH = BASE / "transactions.csv"
+
+init_user_csv(user)
 
 def init_user_csv(current_user: dict) -> None:
     global CSV_PATH
     if current_user and current_user.get("id"):
         CSV_PATH = BASE / f"transactions_{current_user['id']}.csv"
     else:
-        CSV_PATH = BASE / "transactions.csv"
+        CSV_PATH = None
 
 init_user_csv(user)
 
@@ -496,18 +508,32 @@ def extract_line_items(text: str, total_hint: float | None = None):
     def strip_amount(ln: str) -> str:
         return re.sub(r"(-?\d+[.,]\d{2})\s*[A-Z]?\s*$", "", ln).strip(" .:-")
 
-    def parse_qty_unit_price(ln: str):
-        qty = float(m.group("qty").replace(",", "."))
-        unit = float(m.group("price").replace(",", "."))
-        return qty, unit, round(qty * unit, 2)
-
-    UNITS = r"(?:buc|kg|l|rola|pck|pz|pcs)"
-    ONLY_QTY_LINE = re.compile(rf"^\s*\d+(?:[.,]\d+)?\s*{UNITS}?\s*[x×]\s*$", re.I)
-
-    META_RE = re.compile(
-        r"\b(total|subtotal|sum[aă]|plată|plata|payment|paid|payable|amount due|card|visa|mastercard|apple\s*pay|cash|change|tip|rounding)\b",
-        re.I
+   def parse_qty_unit_price(ln: str):
+    """
+    Prinde tipare precum:
+    - 2 x 4,50
+    - 1 buc x 3.00 3,00
+    - 3*2.50 7,50
+    Returnează (qty, unit_price, subtotal). Dacă subtotalul nu e în linie, îl calculează.
+    """
+    m = re.search(
+        r"(?P<qty>\d+(?:[.,]\d+)?)\s*"
+        r"(?:buc|kg|l|rola|pck|pz|pcs)?\s*"
+        r"[x×*]\s*"
+        r"(?P<unit>\d+[.,]\d{2})"
+        r"(?:\s+(?P<subtotal>\d+[.,]\d{2}))?",
+        ln,
+        re.I,
     )
+    if not m:
+        return None
+    qty = float(m.group("qty").replace(",", "."))
+    unit_price = float(m.group("unit").replace(",", "."))
+    if m.group("subtotal"):
+        subtotal = float(m.group("subtotal").replace(",", "."))
+    else:
+        subtotal = round(qty * unit_price, 2)
+    return qty, unit_price, subtotal
 
     def looks_meta(ln: str) -> bool:
         return bool(META_RE.search(ln))
@@ -546,6 +572,14 @@ def extract_line_items(text: str, total_hint: float | None = None):
 
         if qty_info:
             qty, unit_price, subtotal = qty_info
+                # Dacă la capătul liniei există un număr și e ≈ subtotalul,
+    # considerăm că articolul e complet pe același rând.
+            if amt is not None and abs(amt - subtotal) <= 0.05:
+            name_candidate = strip_amount(ln)
+            if not re.search(r"\b(total|tva|card|apple|google|visa|mastercard|rest|ramburs)\b", name_candidate, re.I) and len(name_candidate) >= 2:
+            items.append({"name": name_candidate, "amount": subtotal})
+            i += 1
+            continue
             if i + 1 < len(lines):
                 nxt = lines[i + 1]
                 
