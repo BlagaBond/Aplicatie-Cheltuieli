@@ -26,6 +26,75 @@ import numpy as np
 
 # OCR deps
 import pytesseract
+
+# --------------- USER AUTH AND LOGIN ---------------
+import os
+import requests
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+HEADERS = {
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+}
+
+def get_user_by_username(username: str):
+    url = f"{SUPABASE_URL}/rest/v1/users_auth"
+    params = {"select": "id,username,password", "username": f"eq.{username}"}
+    res = requests.get(url, headers=HEADERS, params=params, timeout=10)
+    res.raise_for_status()
+    data = res.json()
+    return data[0] if data else None
+
+def create_user(username: str, password: str):
+    url = f"{SUPABASE_URL}/rest/v1/users_auth"
+    payload = {"username": username, "password": password}
+    res = requests.post(
+        url,
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json=payload,
+        timeout=10,
+    )
+    res.raise_for_status()
+    return res.json()
+
+def login_view():
+    st.title("Autentificare")
+    tab1, tab2 = st.tabs(["Intră", "Creează cont"])
+    with tab1:
+        u = st.text_input("Username", key="login_u")
+        p = st.text_input("Parolă", type="password", key="login_p")
+        if st.button("Intră"):
+            user = get_user_by_username(u.strip())
+            if not user or user["password"] != p:
+                st.error("User sau parolă greșită")
+            else:
+                st.session_state["user"] = {"id": user["id"], "username": user["username"]}
+                st.experimental_rerun()
+    with tab2:
+        nu = st.text_input("Username nou", key="new_u")
+        np = st.text_input("Parolă nouă", type="password", key="new_p")
+        if st.button("Creează cont"):
+            if not nu or not np:
+                st.warning("Completează user și parolă.")
+            elif get_user_by_username(nu.strip()):
+                st.error("Username deja există.")
+            else:
+                create_user(nu.strip(), np)
+                st.success("Cont creat. Acum intră în tab-ul 'Intră'.")
+
+def require_login():
+    if "user" not in st.session_state:
+        login_view()
+        st.stop()
+    return st.session_state["user"]
+
+# call login to ensure user is authenticated
+user = require_login()
+
+# Greeting for logged in user
+st.write(f"Bun venit, {user['username']}!")
+
 from PIL import Image
 import cv2
 import fitz  # PyMuPDF
