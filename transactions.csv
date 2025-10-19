@@ -1,0 +1,20 @@
+id,date,merchant,amount,currency,category,notes,source,created_at
+9a6536b3bdb3,2025-10-18,vega ICE SFeecropu. 4,-114.94,RON,Food & Groceries,OCR from bon1.jpg,ocr,2025-10-18 16:22:38
+e6f96c69794c,2025-10-18,Mega Image,-196.34,RON,Food & Groceries,manual via app,manual,2025-10-18 16:31:37
+50cf3c3fabe8,2025-10-18,Mega Image,-55.41,RON,Food & Groceries,,manual-expense,2025-10-18 17:16:52
+mm00000000,2025-10-17,Money Manager,-55.0,RON,Abonamente,Youtube premium,import-moneymanager,2025-10-18 17:30:11
+mm00000001,2025-10-17,Money Manager,-207.0,RON,Fumat,Tigara electronica,import-moneymanager,2025-10-18 17:30:11
+mm00000002,2025-10-17,Money Manager,-213.99,RON,? Gift,Flori Catalina,import-moneymanager,2025-10-18 17:30:11
+mm00000003,2025-10-16,Money Manager,-84.27,RON,Food & Groceries,,import-moneymanager,2025-10-18 17:30:11
+mm00000004,2025-10-16,Money Manager,-5.0,RON,Food & Groceries,,import-moneymanager,2025-10-18 17:30:11
+mm00000005,2025-10-16,Money Manager,-1601.46,RON,Rate,Rata 1,import-moneymanager,2025-10-18 17:30:11
+mm00000006,2025-10-16,Money Manager,-205.0,RON,? Gift,Cadou Bianca,import-moneymanager,2025-10-18 17:30:11
+mm00000007,2025-10-15,Money Manager,-62.97,RON,Fumat,,import-moneymanager,2025-10-18 17:30:11
+mm00000008,2025-10-15,Money Manager,-62.97,RON,Fumat,,import-moneymanager,2025-10-18 17:30:11
+mm00000009,2025-10-15,Money Manager,-255.0,RON,? Apparel,Chestii pentru munca,import-moneymanager,2025-10-18 17:30:11
+mm00000010,2025-10-15,Money Manager,-160.0,RON,Other,Fond escadrila,import-moneymanager,2025-10-18 17:30:11
+mm00000011,2025-10-15,Money Manager,-281.33,RON,Abonamente,Telefon,import-moneymanager,2025-10-18 17:30:11
+mm00000012,2025-10-15,Money Manager,8122.0,RON,? Salary,,import-moneymanager,2025-10-18 17:30:11
+mm00000013,2025-10-15,Money Manager,-34.99,RON,?? Divertisment,Clash Royalle,import-moneymanager,2025-10-18 17:30:11
+1dc755ddb8b8,2025-10-18,Order confirmation 41760805068575,-194.0,RON,Food & Groceries,Tokyo Set 11% 1 194.00,ocr-lineitems,2025-10-19 00:00:47
+e6d6eb8f1799,2025-10-18,Order confirmation 41760805068575,38.8,RON,Reduceri,Discount 11% 1 -38.80,ocr-lineitems,2025-10-19 00:00:47
