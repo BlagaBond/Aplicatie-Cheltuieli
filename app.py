@@ -108,6 +108,17 @@ def require_login():
 
 # call login to ensure user is authenticated
 user = require_login()
+# Initialize per-user CSV
+
+def init_user_csv(current_user: dict) -> None:
+    global CSV_PATH
+    if current_user and current_user.get("id"):
+        CSV_PATH = BASE / f"transactions_{current_user['id']}.csv"
+    else:
+        CSV_PATH = BASE / "transactions.csv"
+
+init_user_csv(user)
+
 
 # Greeting for logged in user
 st.write(f"Bun venit, {user['username']}!")
@@ -131,7 +142,7 @@ import joblib
 # ================== SETUP & PATHS ==================
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
 BASE = Path(__file__).resolve().parent
-CSV_PATH = BASE / "transactions.csv"
+CSV_PATH =  None
 CATS_PATH = BASE / "categories.yaml"
 
 ML_DIR = BASE / "ml"
@@ -486,9 +497,6 @@ def extract_line_items(text: str, total_hint: float | None = None):
         return re.sub(r"(-?\d+[.,]\d{2})\s*[A-Z]?\s*$", "", ln).strip(" .:-")
 
     def parse_qty_unit_price(ln: str):
-        m = re.search(r"(?P<qty>\d+(?:[.,]\d+)?)\s*(?:buc|kg|l|rola|pck|pz|pcs)?\s*[x×]\s*(?P<price>\d+[.,]\d{2})", ln, re.I)
-        if not m:
-            return None
         qty = float(m.group("qty").replace(",", "."))
         unit = float(m.group("price").replace(",", "."))
         return qty, unit, round(qty * unit, 2)
@@ -527,6 +535,7 @@ def extract_line_items(text: str, total_hint: float | None = None):
             i += 1; continue
 
         if ONLY_QTY_LINE.match(ln):
+            
             i += 1; continue
 
         amt = amount_at_end(ln)
@@ -539,6 +548,7 @@ def extract_line_items(text: str, total_hint: float | None = None):
             qty, unit_price, subtotal = qty_info
             if i + 1 < len(lines):
                 nxt = lines[i + 1]
+                
                 if not looks_meta(nxt):
                     nxt_amt = amount_at_end(nxt)
                     if nxt_amt is not None and abs(nxt_amt - subtotal) <= 0.05:
