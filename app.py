@@ -23,6 +23,9 @@ import unicodedata
 from datetime import datetime, date
 from pathlib import Path
 import numpy as np
+from PIL import Image
+import cv2
+import fitz  # PyMuPDF
 
 # OCR deps
 import pytesseract
