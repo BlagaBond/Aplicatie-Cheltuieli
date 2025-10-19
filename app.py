@@ -47,16 +47,31 @@ def get_user_by_username(username: str):
     return data[0] if data else None
 
 def create_user(username: str, password: str):
+    """
+    Creează un nou utilizator în tabela users_auth.
+
+    Supabase nu returnează corp JSON în mod implicit la un INSERT, așa că
+    apelul .json() ar produce JSONDecodeError. Adăugăm headerul Prefer:
+    return=representation pentru a primi rândul inserat și verificăm
+    dacă răspunsul are conținut înainte de a-l decoda.
+    """
     url = f"{SUPABASE_URL}/rest/v1/users_auth"
     payload = {"username": username, "password": password}
     res = requests.post(
         url,
-        headers={**HEADERS, "Content-Type": "application/json"},
+        headers={
+            **HEADERS,
+            "Content-Type": "application/json",
+            # solicită ca Supabase să returneze rândul inserat
+            "Prefer": "return=representation",
+        },
         json=payload,
         timeout=10,
     )
     res.raise_for_status()
-    return res.json()
+    # Dacă răspunsul conține date, returnăm JSON; altfel returnăm None
+    return res.json() if res.content else None
+
 
 def login_view():
     st.title("Autentificare")
