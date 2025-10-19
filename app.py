@@ -464,7 +464,6 @@ def auto_category_for_item(name: str, cats_dict: dict) -> str:
             if kw in blob:
                 return cat
     return "Uncategorized"
-
 def extract_line_items(text: str, total_hint: float | None = None):
     """
     Extrage iteme, ignoră meta-liniile (TOTAL/Card/Apple Pay...),
