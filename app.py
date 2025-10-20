@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """
 💼 Budget App — OCR + AI (categorii & discount)
@@ -19,6 +20,8 @@ import yaml
 import uuid
 import io
 import re
+import altair as alt
+
 
 # Elemente tipice de “metadate” din extrase/confirmări care poluează OCR-ul:
 META_RE = re.compile(
@@ -39,6 +42,8 @@ META_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+ONLY_QTY_LINE = re.compile(r"^\s*(?:x\s*)?\d+(?:[.,]\d+)?\s*(?:buc|pcs|x)?\s*$", re.IGNORECASE)
+
 def clean_ocr_text(s: str) -> str:
     s = META_RE.sub(" ", s)
     s = re.sub(r"\s+", " ", s)  # spații multiple -> un singur spațiu
