@@ -178,6 +178,7 @@ def load_tx():
         tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
         tx["created_at"] = pd.to_datetime(tx["created_at"], errors="coerce")
         tx["currency"] = tx["currency"].fillna("RON")
+    tx = coerce_editor_dtypes(tx)
     return tx
 
 def overwrite_tx(df: pd.DataFrame):
@@ -680,8 +681,27 @@ with tabs[0]:
                 tol = st.number_input("Toleranță (RON)", min_value=0.0, max_value=10.0, value=0.50, step=0.10)
                 total_input = st.number_input("Total bon (RON)", min_value=0.0, step=0.01, format="%.2f", value=float(ocr_suggestion.get("amount") or 0.0))
 
-                edited = st.data_editor(
-                    df_items, num_rows="dynamic", use_container_width=True,
+                edited = 
+# --- Ensure DataFrame has editor-friendly dtypes (avoid text<->float mismatches) ---
+def coerce_editor_dtypes(df):
+    import pandas as pd
+    # Columns that should be treated as text in the editor
+    text_cols = ["notes", "merchant", "category", "currency", "source", "id"]
+    for c in text_cols:
+        if c in df.columns:
+            # Convert to plain Python string (object dtype) and replace NaN with empty string
+            df[c] = df[c].astype(object)
+            df[c] = df[c].where(df[c].notna(), "")
+
+    # Amount should be float if present
+    if "amount" in df.columns:
+        try:
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+        except Exception:
+            pass
+    return df
+
+st.data_editor(coerce_editor_dtypes(df_items), num_rows="dynamic", use_container_width=True,
                     column_config={
                         "name": st.column_config.TextColumn("Produs/linie"),
                         "amount": st.column_config.NumberColumn("Sumă (RON)", step=0.01, format="%.2f"),
@@ -1012,8 +1032,7 @@ with tabs[4]:
         view = view[[c for c in order_cols if c in view.columns]]
 
         st.caption("Editează celulele dorite (merchant, amount, category, notes, date). Poți adăuga și rânduri noi.")
-        edited = st.data_editor(
-            view, num_rows="dynamic", use_container_width=True,
+        edited = st.data_editor(coerce_editor_dtypes(view), num_rows="dynamic", use_container_width=True,
             column_config={
                 "date": st.column_config.DateColumn("date", format="YYYY-MM-DD"),
                 "amount": st.column_config.NumberColumn("amount", step=0.01, format="%.2f"),
