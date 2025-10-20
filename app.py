@@ -129,7 +129,7 @@ st.write(f"Bun venit, {user['username']}!")
 # ================== SETUP & PATHS ==================
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
 BASE = Path(__file__).resolve().parent
-CSV_PATH =  None
+# CSV_PATH is set by init_user_csv(user); don't reset it here.
 CATS_PATH = BASE / "categories.yaml"
 
 ML_DIR = BASE / "ml"
@@ -139,10 +139,21 @@ DISC_MODEL_PATH = ML_DIR / "disc_model.pkl"
 CAT_MODEL_PATH = ML_DIR / "cat_model.pkl"
 
 # ================== CSV HELPERS ==================
+
 def ensure_csv():
+    """Create user-specific CSV if missing and recover if CSV_PATH is None."""
+    global CSV_PATH
+    # Recover CSV_PATH if it was reset
+    if CSV_PATH is None:
+        u = st.session_state.get("user") if "user" in st.session_state else None
+        base = Path(__file__).resolve().parent
+        CSV_PATH = base / (f"transactions_{u['id']}.csv" if u and u.get("id") else "transactions.csv")
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CSV_PATH.exists():
         cols = ["id", "date", "merchant", "amount", "currency", "category", "notes", "source", "created_at"]
         pd.DataFrame(columns=cols).to_csv(CSV_PATH, index=False, encoding="utf-8")
+
+
 
 def append_rows(df: pd.DataFrame):
     exists = CSV_PATH.exists()
@@ -224,36 +235,6 @@ def normalize_text(s: str) -> str:
     return s.strip().lower()
 
 # ================== IMPORT HELPERS ==================
-
-# ================== UI: IMPORT EXTRAS/STATEMENT ==================
-with st.expander("📄 Import extras / confirmare tranzacție (PDF/JPG/PNG)", expanded=False):
-    f_stmt = st.file_uploader("Încarcă PDF / imagine", type=["pdf","jpg","jpeg","png"], key="stmt_upload")
-    if f_stmt is not None:
-        raw_text_stmt = read_text_from_file(f_stmt)
-        st.text_area("Text extras (debug)", raw_text_stmt, height=180)
-        parsed_stmt = parse_statement_text(raw_text_stmt)
-
-        st.subheader("Tranzacție detectată")
-        colA, colB = st.columns(2)
-        with colA:
-            st.write(f"**Data**: {parsed_stmt.get('date','')}")
-            st.write(f"**Comerciant**: {parsed_stmt.get('merchant','')}")
-            st.write(f"**Suma**: {parsed_stmt.get('amount')} {parsed_stmt.get('currency','')}")
-        with colB:
-            st.write(f"**Note**: {parsed_stmt.get('notes','')}")
-            st.write(f"**Sursă**: {parsed_stmt.get('source','')}")
-        
-        parsed_stmt["merchant"] = st.text_input("Editează merchant", parsed_stmt.get("merchant",""))
-        parsed_stmt["category"] = st.text_input("Categorie (opțional)", parsed_stmt.get("category",""))
-        parsed_stmt["notes"] = st.text_input("Note (opțional)", parsed_stmt.get("notes",""))
-        
-        if st.button("✅ Adaugă tranzacția în baza de date", key="stmt_add_btn"):
-            ensure_csv()
-            append_rows(pd.DataFrame([parsed_stmt]))
-            st.success("Tranzacția a fost adăugată.")
-            st.rerun()
-
-
 def read_csv_auto_bytes(b: bytes):
     for enc in ["utf-8-sig", "utf-16", "cp1252", "latin-1"]:
         try:
@@ -630,27 +611,6 @@ tabs = st.tabs(["🧾 Cheltuieli", "💰 Venituri", "📊 Dashboard", "📥 Impo
 
 exp_cats, inc_cats, cats_dict = load_categories()
 tx = load_tx()
-
-# ================== EXPORT DATA (CSV / XLSX / JSON) ==================
-st.subheader("⬇️ Export date")
-scope = st.radio("Ce export?", ["Filtrul curent", "Toate tranzacțiile"], horizontal=True, key="export_scope")
-df_export = tx.copy()
-if scope == "Filtrul curent":
-    df_export = tx
-
-csv_bytes = df_export.to_csv(index=False).encode("utf-8")
-st.download_button("Export CSV", data=csv_bytes, file_name="transactions_export.csv", mime="text/csv", key="exp_csv")
-
-from io import BytesIO as _BytesIOExp
-excel_buf = _BytesIOExp()
-with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
-    df_export.to_excel(writer, index=False, sheet_name="Transactions")
-st.download_button("Export Excel (.xlsx)", data=excel_buf.getvalue(), file_name="transactions_export.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="exp_xlsx")
-
-json_bytes = df_export.to_json(orient="records", force_ascii=False).encode("utf-8")
-st.download_button("Export JSON", data=json_bytes, file_name="transactions_export.json", mime="application/json", key="exp_json")
-
-
 
 # ===== TAB 1: Expenses =====
 with tabs[0]:
