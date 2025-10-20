@@ -129,7 +129,7 @@ st.write(f"Bun venit, {user['username']}!")
 # ================== SETUP & PATHS ==================
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
 BASE = Path(__file__).resolve().parent
-CSV_PATH =  None
+# CSV_PATH is set by init_user_csv(user); don't reset it here.
 CATS_PATH = BASE / "categories.yaml"
 
 ML_DIR = BASE / "ml"
@@ -139,7 +139,16 @@ DISC_MODEL_PATH = ML_DIR / "disc_model.pkl"
 CAT_MODEL_PATH = ML_DIR / "cat_model.pkl"
 
 # ================== CSV HELPERS ==================
+
 def ensure_csv():
+    """Create user-specific CSV if missing and recover if CSV_PATH is None."""
+    global CSV_PATH
+    # Recover CSV_PATH if it was reset
+    if CSV_PATH is None:
+        u = st.session_state.get("user") if "user" in st.session_state else None
+        base = Path(__file__).resolve().parent
+        CSV_PATH = base / (f"transactions_{u['id']}.csv" if u and u.get("id") else "transactions.csv")
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CSV_PATH.exists():
         cols = ["id", "date", "merchant", "amount", "currency", "category", "notes", "source", "created_at"]
         pd.DataFrame(columns=cols).to_csv(CSV_PATH, index=False, encoding="utf-8")
