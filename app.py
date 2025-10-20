@@ -129,7 +129,8 @@ st.write(f"Bun venit, {user['username']}!")
 # ================== SETUP & PATHS ==================
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
 BASE = Path(__file__).resolve().parent
-# CSV_PATH is set by init_user_csv(user); don't reset it here.
+# Nu resetăm CSV_PATH aici; dacă este None, ensure_csv îl va reconstrui pe baza utilizatorului curent.
+CSV_PATH = CSV_PATH
 CATS_PATH = BASE / "categories.yaml"
 
 ML_DIR = BASE / "ml"
@@ -139,21 +140,36 @@ DISC_MODEL_PATH = ML_DIR / "disc_model.pkl"
 CAT_MODEL_PATH = ML_DIR / "cat_model.pkl"
 
 # ================== CSV HELPERS ==================
-
 def ensure_csv():
-    """Create user-specific CSV if missing and recover if CSV_PATH is None."""
+    """
+    Asigură existența fișierului CSV pentru utilizatorul curent. Dacă `CSV_PATH`
+    este None (de exemplu a fost resetat accidental), se reconstruiește
+    folosind informațiile din sesiune. Creează directoarele necesare și
+    un fișier CSV cu headere dacă acesta nu există.
+    """
     global CSV_PATH
-    # Recover CSV_PATH if it was reset
+    # Dacă calea nu e setată, încearcă să o recuperezi din st.session_state
     if CSV_PATH is None:
         u = st.session_state.get("user") if "user" in st.session_state else None
-        base = Path(__file__).resolve().parent
-        CSV_PATH = base / (f"transactions_{u['id']}.csv" if u and u.get("id") else "transactions.csv")
+        if u and u.get("id"):
+            CSV_PATH = BASE / f"transactions_{u['id']}.csv"
+        else:
+            CSV_PATH = BASE / "transactions.csv"
+    # Asigură că directorul există
     CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not CSV_PATH.exists():
-        cols = ["id", "date", "merchant", "amount", "currency", "category", "notes", "source", "created_at"]
+        cols = [
+            "id",
+            "date",
+            "merchant",
+            "amount",
+            "currency",
+            "category",
+            "notes",
+            "source",
+            "created_at",
+        ]
         pd.DataFrame(columns=cols).to_csv(CSV_PATH, index=False, encoding="utf-8")
-
-
 
 def append_rows(df: pd.DataFrame):
     exists = CSV_PATH.exists()
@@ -607,29 +623,10 @@ def extract_line_items(text: str, total_hint: float | None = None):
     return deduped
 # ================== UI ==================
 st.title("💼 Budget App — OCR + AI (categorii & discount)")
-tabs = st.tabs(["🧾 Cheltuieli", "💰 Venituri", "📊 Dashboard", "📥 Import", "🧹 Editare tranzacții"])
+tabs = st.tabs(["🧾 Cheltuieli", "💰 Venituri", "📊 Dashboard", "📥 Import", "🧹 Editare tranzacții", "📤 Export"])
 
 exp_cats, inc_cats, cats_dict = load_categories()
 tx = load_tx()
-
-# ---- Sidebar Export (always visible) ----
-with st.sidebar:
-    st.subheader("⬇️ Export date")
-    scope_sb = st.radio("Ce export?", ["Filtrul curent", "Toate"], horizontal=True, key="export_scope_sidebar")
-    df_export_sb = tx.copy()
-    if scope_sb == "Filtrul curent":
-        df_export_sb = tx  # înlocuiește cu df-ul filtrat dacă ai
-    csv_bytes_sb = df_export_sb.to_csv(index=False).encode("utf-8")
-    st.download_button("CSV", data=csv_bytes_sb, file_name="transactions_export.csv", mime="text/csv", key="exp_csv_sb")
-    from io import BytesIO as _BytesIOExpSB
-    excel_buf_sb = _BytesIOExpSB()
-    with pd.ExcelWriter(excel_buf_sb, engine="openpyxl") as writer:
-        df_export_sb.to_excel(writer, index=False, sheet_name="Transactions")
-    st.download_button("Excel", data=excel_buf_sb.getvalue(), file_name="transactions_export.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="exp_xlsx_sb")
-    json_bytes_sb = df_export_sb.to_json(orient="records", force_ascii=False).encode("utf-8")
-    st.download_button("JSON", data=json_bytes_sb, file_name="transactions_export.json", mime="application/json", key="exp_json_sb")
-
 
 # ===== TAB 1: Expenses =====
 with tabs[0]:
@@ -772,8 +769,11 @@ with tabs[0]:
                 with st.expander("📜 Text OCR (debug)", expanded=False):
                     st.text_area("Rezultat OCR", value=txt, height=200)
 
+            except pytesseract.TesseractNotFoundError:
+                # Eroare specifică: Tesseract nu este instalat sau nu este în PATH.
+                st.error("OCR indisponibil: Tesseract nu este instalat sau nu este în PATH. Încarcă PDF-uri care conțin text sau instalează Tesseract pentru a extrage text din imagini.")
             except Exception as e:
-                st.error(f"Eroare OCR: {e} — verifică Tesseract.")
+                st.error(f"Eroare OCR: {e}")
 
     with col2:
         st.subheader("Adăugare rapidă (o singură sumă)")
@@ -1073,3 +1073,53 @@ with tabs[4]:
                 overwrite_tx(deduped)
                 st.success(f"Am eliminat {removed} duplicate.")
                 st.rerun()
+
+# ===== TAB 6: Export date =====
+with tabs[5]:
+    st.header("⬇️ Export date")
+    df_export = load_tx()
+    if df_export.empty:
+        st.info("Nu există tranzacții de exportat.")
+    else:
+        # Export CSV
+        csv_bytes = df_export.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Export CSV", data=csv_bytes, file_name="transactions_export.csv", mime="text/csv"
+        )
+        # Export Excel: încearcă openpyxl, apoi xlsxwriter
+        excel_data = None
+        excel_created = False
+        try:
+            import openpyxl  # noqa: F401
+            excel_buf = io.BytesIO()
+            with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+                df_export.to_excel(writer, index=False, sheet_name="Transactions")
+            excel_data = excel_buf.getvalue()
+            excel_created = True
+        except ImportError:
+            try:
+                import xlsxwriter  # noqa: F401
+                excel_buf = io.BytesIO()
+                with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
+                    df_export.to_excel(writer, index=False, sheet_name="Transactions")
+                excel_data = excel_buf.getvalue()
+                excel_created = True
+            except ImportError:
+                excel_created = False
+        if excel_created and excel_data:
+            st.download_button(
+                "Export Excel (.xlsx)",
+                data=excel_data,
+                file_name="transactions_export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.info("Pentru export Excel, instalează pachetele 'openpyxl' sau 'xlsxwriter' în mediul de execuție.")
+        # Export JSON
+        json_bytes = df_export.to_json(orient="records", force_ascii=False).encode("utf-8")
+        st.download_button(
+            "Export JSON",
+            data=json_bytes,
+            file_name="transactions_export.json",
+            mime="application/json",
+        )
