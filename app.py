@@ -14,11 +14,26 @@ Funcționalități:
 
 # ================== IMPORTURI ==================
 import streamlit as st
+
+st.set_page_config(page_title="Budget OCR + AI", layout="wide")
+
+import altair as alt
+from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+import joblib
 import pandas as pd
 import yaml
 import uuid
 import io
 import re
+
+
+
+# Regex-uri folosite în parsarea liniilor de pe bon
+META_RE = re.compile(r"\b(total|tva|card|visa|mastercard|rest|cash|change|apple|google|ramburs|plata|receipt|bon|fiscal)\b", re.I)
+ONLY_QTY_LINE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*(?:buc|kg|l|pcs)?\s*[x×*]\s*\d+[.,]\d{2}(?:\s+\d+[.,]\d{2})?\s*$", re.I)
+
 import unicodedata
 from datetime import datetime, date
 from pathlib import Path
@@ -38,7 +53,7 @@ from pathlib import Path  # <- asigură-te că importul există
 
 # --- CONSTANTE & PATHS DE BAZĂ (trebuie să fie DEFINITE ÎNAINTE de init_user_csv!) ---
 BASE = Path(__file__).resolve().parent
-CSV_PATH = None  # va fi setat per-user după login
+# CSV_PATH preserved from init_user_csv(user)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
@@ -127,9 +142,8 @@ init_user_csv(user)
 st.write(f"Bun venit, {user['username']}!")
 
 # ================== SETUP & PATHS ==================
-st.set_page_config(page_title="Budget OCR + AI", layout="wide")
 BASE = Path(__file__).resolve().parent
-CSV_PATH =  None
+# CSV_PATH preserved from init_user_csv(user)
 CATS_PATH = BASE / "categories.yaml"
 
 ML_DIR = BASE / "ml"
@@ -140,7 +154,10 @@ CAT_MODEL_PATH = ML_DIR / "cat_model.pkl"
 
 # ================== CSV HELPERS ==================
 def ensure_csv():
-    if not CSV_PATH.exists():
+    
+    if CSV_PATH is None:
+        raise RuntimeError("CSV_PATH nu e setat (verifică init_user_csv și să nu-l resetezi ulterior).")
+if not CSV_PATH.exists():
         cols = ["id", "date", "merchant", "amount", "currency", "category", "notes", "source", "created_at"]
         pd.DataFrame(columns=cols).to_csv(CSV_PATH, index=False, encoding="utf-8")
 
