@@ -19,6 +19,30 @@ import yaml
 import uuid
 import io
 import re
+
+# Elemente tipice de “metadate” din extrase/confirmări care poluează OCR-ul:
+META_RE = re.compile(
+    r"""
+    (?:Booking\s*Info|
+       Booking\s*Date|Valuation\s*Date|Transaction\s*Date|Booking\s*Reference|
+       Merchant|Location|Card\s*Number|Virtual\s*card\s*number|Card|Paid\s*with|
+       Exchange\s*rate|Comision|Commission|
+       Apple\s*Pay|
+       Tranzac(?:tie|ție)\s*comerciant|
+       Data(?:_|\\s*)Ora|
+       Ref(?:erence)?|
+       Suma\s*platita|Suma\s*decontata|
+       Rata\s*de\s*schimb|
+       Locat(?:ie|ie|ia)|Loca(?:tie|ție)|
+       Bucuresti|București
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+def clean_ocr_text(s: str) -> str:
+    s = META_RE.sub(" ", s)
+    s = re.sub(r"\s+", " ", s)  # spații multiple -> un singur spațiu
+    return s.strip()
 import unicodedata
 from datetime import datetime, date
 from pathlib import Path
