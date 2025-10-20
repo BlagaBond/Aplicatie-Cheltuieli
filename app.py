@@ -623,7 +623,7 @@ with st.sidebar:
     st.download_button("CSV", data=csv_bytes_sb, file_name="transactions_export.csv", mime="text/csv", key="exp_csv_sb")
     from io import BytesIO as _BytesIOExpSB
     excel_buf_sb = _BytesIOExpSB()
-    with pd.ExcelWriter(excel_buf_sb, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(excel_buf_sb, engine="openpyxl") as writer:
         df_export_sb.to_excel(writer, index=False, sheet_name="Transactions")
     st.download_button("Excel", data=excel_buf_sb.getvalue(), file_name="transactions_export.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="exp_xlsx_sb")
