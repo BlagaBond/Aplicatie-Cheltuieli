@@ -612,6 +612,25 @@ tabs = st.tabs(["🧾 Cheltuieli", "💰 Venituri", "📊 Dashboard", "📥 Impo
 exp_cats, inc_cats, cats_dict = load_categories()
 tx = load_tx()
 
+# ---- Sidebar Export (always visible) ----
+with st.sidebar:
+    st.subheader("⬇️ Export date")
+    scope_sb = st.radio("Ce export?", ["Filtrul curent", "Toate"], horizontal=True, key="export_scope_sidebar")
+    df_export_sb = tx.copy()
+    if scope_sb == "Filtrul curent":
+        df_export_sb = tx  # înlocuiește cu df-ul filtrat dacă ai
+    csv_bytes_sb = df_export_sb.to_csv(index=False).encode("utf-8")
+    st.download_button("CSV", data=csv_bytes_sb, file_name="transactions_export.csv", mime="text/csv", key="exp_csv_sb")
+    from io import BytesIO as _BytesIOExpSB
+    excel_buf_sb = _BytesIOExpSB()
+    with pd.ExcelWriter(excel_buf_sb, engine="xlsxwriter") as writer:
+        df_export_sb.to_excel(writer, index=False, sheet_name="Transactions")
+    st.download_button("Excel", data=excel_buf_sb.getvalue(), file_name="transactions_export.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="exp_xlsx_sb")
+    json_bytes_sb = df_export_sb.to_json(orient="records", force_ascii=False).encode("utf-8")
+    st.download_button("JSON", data=json_bytes_sb, file_name="transactions_export.json", mime="application/json", key="exp_json_sb")
+
+
 # ===== TAB 1: Expenses =====
 with tabs[0]:
     st.header("🧾 Adaugă Cheltuială din bon (cu linii de produs)")
