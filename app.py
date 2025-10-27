@@ -14,21 +14,20 @@ Funcționalități:
 
 # ================== IMPORTURI ==================
 import streamlit as st
-
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
-
-import altair as alt
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
 import joblib
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.pipeline import Pipeline
+import altair as alt
+from typing import Dict, Any, List
+from dataclasses import dataclass
+
 import pandas as pd
 import yaml
 import uuid
 import io
 import re
-
-
 
 # Regex-uri folosite în parsarea liniilor de pe bon
 META_RE = re.compile(r"\b(total|tva|card|visa|mastercard|rest|cash|change|apple|google|ramburs|plata|receipt|bon|fiscal)\b", re.I)
@@ -142,6 +141,7 @@ init_user_csv(user)
 st.write(f"Bun venit, {user['username']}!")
 
 # ================== SETUP & PATHS ==================
+
 BASE = Path(__file__).resolve().parent
 # CSV_PATH preserved from init_user_csv(user)
 CATS_PATH = BASE / "categories.yaml"
@@ -154,12 +154,23 @@ CAT_MODEL_PATH = ML_DIR / "cat_model.pkl"
 
 # ================== CSV HELPERS ==================
 def ensure_csv():
-    
-    if CSV_PATH is None:
-        raise RuntimeError("CSV_PATH nu e setat (verifică init_user_csv și să nu-l resetezi ulterior).")
-if not CSV_PATH.exists():
+    if not CSV_PATH.exists():
         cols = ["id", "date", "merchant", "amount", "currency", "category", "notes", "source", "created_at"]
-        pd.DataFrame(columns=cols).to_csv(CSV_PATH, index=False, encoding="utf-8")
+        
+if CSV_PATH is None:
+    raise RuntimeError("CSV_PATH nu e setat (verifică init_user_csv și să nu-l resetezi ulterior).")
+pd.DataFrame({
+    "id": pd.Series(dtype=object),
+    "date": pd.Series(dtype=object),
+    "merchant": pd.Series(dtype=object),
+    "amount": pd.Series(dtype="float64"),
+    "currency": pd.Series(dtype=object),
+    "category": pd.Series(dtype=object),
+    "notes": pd.Series(dtype=object),
+    "source": pd.Series(dtype=object),
+    "created_at": pd.Series(dtype=object),
+}).to_csv(CSV_PATH, index=False, encoding="utf-8")
+
 
 def append_rows(df: pd.DataFrame):
     exists = CSV_PATH.exists()
@@ -170,6 +181,22 @@ def append_rows(df: pd.DataFrame):
 
 def append_row(row: dict):
     append_rows(pd.DataFrame([row]))
+
+
+# --- Ensure DataFrame has editor-friendly dtypes (avoid text<->float mismatches) ---
+def coerce_editor_dtypes(df):
+    import pandas as pd
+    text_cols = ["notes", "merchant", "category", "currency", "source", "id"]
+    for c in text_cols:
+        if c in df.columns:
+            df[c] = df[c].astype(object)
+            df[c] = df[c].where(df[c].notna(), "")
+    if "amount" in df.columns:
+        try:
+            df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+        except Exception:
+            pass
+    return df
 
 def load_tx():
     ensure_csv()
@@ -681,27 +708,8 @@ with tabs[0]:
                 tol = st.number_input("Toleranță (RON)", min_value=0.0, max_value=10.0, value=0.50, step=0.10)
                 total_input = st.number_input("Total bon (RON)", min_value=0.0, step=0.01, format="%.2f", value=float(ocr_suggestion.get("amount") or 0.0))
 
-                edited = 
-# --- Ensure DataFrame has editor-friendly dtypes (avoid text<->float mismatches) ---
-def coerce_editor_dtypes(df):
-    import pandas as pd
-    # Columns that should be treated as text in the editor
-    text_cols = ["notes", "merchant", "category", "currency", "source", "id"]
-    for c in text_cols:
-        if c in df.columns:
-            # Convert to plain Python string (object dtype) and replace NaN with empty string
-            df[c] = df[c].astype(object)
-            df[c] = df[c].where(df[c].notna(), "")
-
-    # Amount should be float if present
-    if "amount" in df.columns:
-        try:
-            df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
-        except Exception:
-            pass
-    return df
-
-st.data_editor(coerce_editor_dtypes(df_items), num_rows="dynamic", use_container_width=True,
+                edited = st.data_editor(
+                    df_items, num_rows="dynamic", use_container_width=True,
                     column_config={
                         "name": st.column_config.TextColumn("Produs/linie"),
                         "amount": st.column_config.NumberColumn("Sumă (RON)", step=0.01, format="%.2f"),
@@ -1032,7 +1040,8 @@ with tabs[4]:
         view = view[[c for c in order_cols if c in view.columns]]
 
         st.caption("Editează celulele dorite (merchant, amount, category, notes, date). Poți adăuga și rânduri noi.")
-        edited = st.data_editor(coerce_editor_dtypes(view), num_rows="dynamic", use_container_width=True,
+        edited = st.data_editor(
+            view, num_rows="dynamic", use_container_width=True,
             column_config={
                 "date": st.column_config.DateColumn("date", format="YYYY-MM-DD"),
                 "amount": st.column_config.NumberColumn("amount", step=0.01, format="%.2f"),
@@ -1079,3 +1088,221 @@ with tabs[4]:
                 overwrite_tx(deduped)
                 st.success(f"Am eliminat {removed} duplicate.")
                 st.rerun()
+
+
+
+# ==================== AI FINANCE STRATEGY (Lightweight) ====================
+ESSENTIAL_CATS = {
+    "Groceries": "essential",
+    "Food": "essential",
+    "Utilities": "essential",
+    "Transport": "essential",
+    "Health": "essential",
+    "Housing": "essential",
+    "Kids": "essential",
+    "Pets": "essential",
+    "Taxes": "essential",
+    "Shopping": "wants",
+    "Restaurants": "wants",
+    "Entertainment": "wants",
+    "Travel": "wants",
+    "Subscriptions": "wants",
+    "Hobby": "wants",
+}
+
+def _classify_row_for_ai(cat: str, merchant: str = "") -> str:
+    if not isinstance(cat, str):
+        return "unknown"
+    return ESSENTIAL_CATS.get(cat, "unknown")
+
+def _month_key_for_ai(ts):
+    if pd.isna(ts):
+        return None
+    try:
+        return pd.to_datetime(ts).strftime("%Y-%m")
+    except Exception:
+        return None
+
+@dataclass
+class StrategyInput:
+    df: pd.DataFrame
+    income_next: float
+    rent: float
+    loan: float
+    ef_target_months: int = 3
+    ef_current: float = 0.0
+    extra_debt_payment: float = 0.0
+    min_savings_pct: float = 0.10
+    max_wants_pct: float = 0.30
+    prefer_emergency_first: bool = True
+
+@dataclass
+class StrategyResult:
+    allocations: pd.DataFrame
+    narrative: str
+    diagnostics: Dict[str, Any]
+
+def _prepare_last_month_for_ai(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if "date" in df.columns:
+        df = df.copy()
+        df["_ym"] = df["date"].apply(_month_key_for_ai)
+    else:
+        df = df.copy()
+        df["_ym"] = None
+    months = [m for m in df["_ym"].dropna().unique()]
+    if not months:
+        return df.iloc[0:0]
+    last_month = sorted(months)[-1]
+    mdf = df[df["_ym"] == last_month].copy()
+    mdf["ew"] = [_classify_row_for_ai(c, m) for c, m in zip(mdf.get("category", ""), mdf.get("merchant", ""))]
+    return mdf
+
+def suggest_strategy(inp: StrategyInput) -> StrategyResult:
+    df = _prepare_last_month_for_ai(inp.df.copy())
+
+    tx_income_hist = df[df["amount"] > 0]["amount"].sum() if "amount" in df.columns else 0.0
+    tx_expenses_hist = -df[df["amount"] < 0]["amount"].sum() if "amount" in df.columns else 0.0
+
+    essential_hist = -df[(df["amount"] < 0) & (df["ew"] == "essential")]["amount"].sum() if "amount" in df.columns else 0.0
+    wants_hist = -df[(df["amount"] < 0) & (df["ew"] == "wants")]["amount"].sum() if "amount" in df.columns else 0.0
+    unknown_hist = tx_expenses_hist - (essential_hist + wants_hist)
+
+    fixed = float(inp.rent) + float(inp.loan)
+    variable_essentials = max(0.0, essential_hist)
+
+    income = float(inp.income_next)
+    baseline_needs = fixed + variable_essentials
+    surplus = income - baseline_needs
+
+    planned_wants_cap = min(inp.max_wants_pct * income, max(0.0, wants_hist))
+    if surplus - planned_wants_cap < 0:
+        planned_wants_cap = max(0.0, surplus)
+    surplus_after_wants = max(0.0, surplus - planned_wants_cap)
+
+    ef_target = inp.ef_target_months * max(1.0, baseline_needs - wants_hist)
+    ef_gap = max(0.0, ef_target - float(inp.ef_current))
+
+    min_savings = inp.min_savings_pct * income
+
+    alloc = []
+    alloc.append({"bucket": "Rent", "amount": round(inp.rent, 2), "why": "Locuință (fix)"})
+    alloc.append({"bucket": "Loan (min)", "amount": round(inp.loan, 2), "why": "Rată credit (fix)"})
+    alloc.append({"bucket": "Essentials (variable)", "amount": round(variable_essentials, 2), "why": "Media luna trecută"})
+    alloc.append({"bucket": "Wants (capped)", "amount": round(planned_wants_cap, 2), "why": f"Plafon {int(inp.max_wants_pct*100)}% din venit"})
+
+    remaining = income - sum(a["amount"] for a in alloc)
+
+    ef_alloc = 0.0
+    inv_alloc = 0.0
+    debt_extra = float(inp.extra_debt_payment or 0.0)
+    base_savings = max(min_savings, 0.0)
+
+    if inp.prefer_emergency_first:
+        ef_alloc = min(remaining, ef_gap, max(remaining - debt_extra, 0.0))
+        rest_after_ef = max(0.0, remaining - ef_alloc - debt_extra)
+        inv_alloc = rest_after_ef
+    else:
+        half = max(0.0, remaining - debt_extra) * 0.5
+        ef_alloc = min(half, ef_gap)
+        inv_alloc = max(0.0, remaining - debt_extra - ef_alloc)
+
+    if ef_alloc + inv_alloc < base_savings and remaining - debt_extra > 0:
+        bump = min(base_savings - (ef_alloc + inv_alloc), max(0.0, remaining - debt_extra - (ef_alloc + inv_alloc)))
+        inv_alloc += bump
+
+    if debt_extra > 0:
+        debt_extra = min(debt_extra, max(0.0, income - sum(a["amount"] for a in alloc) - ef_alloc - inv_alloc))
+
+    if ef_alloc > 0:
+        alloc.append({"bucket": "Emergency Fund", "amount": round(ef_alloc, 2), "why": f"Țintă {inp.ef_target_months} luni"})
+    if inv_alloc > 0:
+        alloc.append({"bucket": "Investments / T-bills", "amount": round(inv_alloc, 2), "why": "După EF"})
+    if debt_extra > 0:
+        alloc.append({"bucket": "Loan (extra)", "amount": round(debt_extra, 2), "why": "Rambursare anticipată"})
+
+    df_alloc = pd.DataFrame(alloc)
+    df_alloc["pct_of_income"] = (df_alloc["amount"] / max(1.0, income)).round(4)
+
+    bullets = []
+    bullets.append(f"Venit estimat luna următoare: {income:,.0f} lei.")
+    bullets.append(f"Fixe: chirie {inp.rent:,.0f} + rată {inp.loan:,.0f} = {fixed:,.0f} lei.")
+    bullets.append(f"Esențiale variabile ~ {variable_essentials:,.0f} lei; wants plafonate la {int(inp.max_wants_pct*100)}% din venit.")
+    bullets.append(f"Țintă fond de urgență: {inp.ef_target_months} luni → {ef_target:,.0f} lei; gap curent: {ef_gap:,.0f} lei.")
+    bullets.append(f"Economii minime vizate: {int(inp.min_savings_pct*100)}% din venit.")
+    if ef_alloc > 0:
+        bullets.append(f"Aloc {ef_alloc:,.0f} lei către fondul de urgență, apoi {inv_alloc:,.0f} lei către investiții/T-bills.")
+    else:
+        bullets.append(f"Aloc {inv_alloc:,.0f} lei către investiții/T-bills (EF atins sau gap 0).")
+    if debt_extra > 0:
+        bullets.append(f"Rambursare anticipată: {debt_extra:,.0f} lei/lună.")
+
+    narrative = " • " + "\n • ".join(bullets)
+
+    diags = {
+        "income_next": income,
+        "baseline_needs": baseline_needs,
+        "surplus_pre_wants": surplus,
+        "surplus_after_wants": surplus_after_wants,
+        "hist": {
+            "income_last_month": tx_income_hist,
+            "expenses_last_month": tx_expenses_hist,
+            "essential_last_month": essential_hist,
+            "wants_last_month": wants_hist,
+            "unknown_last_month": unknown_hist,
+        }
+    }
+    return StrategyResult(allocations=df_alloc, narrative=narrative, diagnostics=diags)
+
+
+
+
+# ==================== UI: AI Strategy (beta) ====================
+try:
+    _tx_exists = tx is not None
+except Exception:
+    try:
+        tx = load_tx()
+    except Exception:
+        tx = pd.DataFrame(columns=["id","date","merchant","amount","currency","category","notes","source","created_at"])
+
+st.markdown("---")
+st.header("AI Strategy (beta)")
+
+c1, c2, c3 = st.columns(3)
+with c1:
+    _income_next = st.number_input("Venit luna următoare (lei)", min_value=0.0, value=20000.0, step=100.0)
+    _ef_target_months = st.slider("Țintă fond urgență (luni)", 1, 12, 3)
+with c2:
+    _rent = st.number_input("Chirie (lei)", min_value=0.0, value=2500.0, step=50.0)
+    _loan = st.number_input("Rată credit (lei)", min_value=0.0, value=1585.0, step=50.0)
+with c3:
+    _ef_current = st.number_input("Fond urgență existent (lei)", min_value=0.0, value=0.0, step=100.0)
+    _extra_debt = st.number_input("Rambursare anticipată/lună (lei)", min_value=0.0, value=0.0, step=50.0)
+
+_min_savings_pct = st.slider("Economii minime (% din venit)", 0, 50, 10) / 100.0
+_max_wants_pct = st.slider("Plafon cheltuieli wants (% din venit)", 0, 70, 30) / 100.0
+_prefer_ef_first = st.checkbox("Prioritizează fondul de urgență înaintea investițiilor", value=True)
+
+if st.button("Generează strategie"):
+    _si = StrategyInput(
+        df=tx.copy(),
+        income_next=_income_next,
+        rent=_rent,
+        loan=_loan,
+        ef_target_months=_ef_target_months,
+        ef_current=_ef_current,
+        extra_debt_payment=_extra_debt,
+        min_savings_pct=_min_savings_pct,
+        max_wants_pct=_max_wants_pct,
+        prefer_emergency_first=_prefer_ef_first,
+    )
+    _res = suggest_strategy(_si)
+    st.markdown("#### Recomandări")
+    st.write(_res.narrative)
+    st.markdown("#### Alocări propuse")
+    st.dataframe(_res.allocations, use_container_width=True)
+    with st.expander("Diagnostic (detalii)"):
+        st.json(_res.diagnostics)
+
