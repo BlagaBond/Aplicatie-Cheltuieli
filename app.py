@@ -45,7 +45,6 @@ import fitz  # PyMuPDF
 import pytesseract
 
 # --------------- USER AUTH AND LOGIN ---------------
-# --------------- USER AUTH AND LOGIN ---------------
 import os
 import requests
 from pathlib import Path  # <- asigură-te că importul există
@@ -1166,7 +1165,7 @@ def suggest_strategy(inp: StrategyInput) -> StrategyResult:
     tx_expenses_hist = -df[df["amount"] < 0]["amount"].sum() if "amount" in df.columns else 0.0
 
     essential_hist = -df[(df["amount"] < 0) & (df["ew"] == "essential")]["amount"].sum() if "amount" in df.columns else 0.0
-    wants_hist = -df[(df["amount"] < 0) & (df["ew"] == "wants")]["amount"].sum() if "amount" in df.columns else 0.0
+    essential_hist = -df[(df["amount"] < 0) & (df.get("ew", "") == "essential")]["amount"].sum()
     unknown_hist = tx_expenses_hist - (essential_hist + wants_hist)
 
     fixed = float(inp.rent) + float(inp.loan)
