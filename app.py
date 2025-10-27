@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-💼 Budget App — OCR + AI (categorii & discount)
+💼 Budget App 
 Compatibil: Windows + Python 3.12
 
 Funcționalități:
@@ -48,7 +48,142 @@ import pytesseract
 import os
 import requests
 from pathlib import Path  # <- asigură-te că importul există
+# ==== PATCH 1: imports + helpers (TOP of app.py) ====
+from __future__ import annotations
+import uuid, re
+from datetime import datetime, date as _date
+import pandas as pd
+import streamlit as st
 
+# setează calea ta reală:
+CSV_PATH = "transactions.csv"   # <- schimbă dacă folosești altă locație
+
+SCHEMA_COLS = [
+    "id","date","merchant","amount","currency","category","notes","source","created_at","ew"
+]
+DEFAULTS = {
+    "id": lambda: uuid.uuid4().hex[:10],
+    "date": lambda: datetime.utcnow().strftime("%Y-%m-%d"),
+    "merchant": "",
+    "amount": 0.0,
+    "currency": "RON",
+    "category": "uncategorized",
+    "notes": "",
+    "source": "manual",
+    "created_at": lambda: datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+    "ew": "unknown",  # essential / nonessential / unknown
+}
+
+def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    if len(df.columns):
+        df.columns = [str(c).strip().lower() for c in df.columns]
+
+    alias = {
+        "descriere":"merchant","merchant name":"merchant","details":"merchant",
+        "sum":"amount","value":"amount","val":"amount",
+        "data":"date","tip":"category","type":"category"
+    }
+    for k,v in alias.items():
+        if k in df.columns and v not in df.columns:
+            df.rename(columns={k:v}, inplace=True)
+
+    if "amount" in df.columns:
+        df["amount"] = (
+            df["amount"].astype(str)
+            .str.replace(" ", "", regex=False)
+            .str.replace(".", "", regex=False)
+            .str.replace(",", ".", regex=False)
+        )
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+
+    for col in SCHEMA_COLS:
+        if col not in df.columns:
+            default = DEFAULTS[col]
+            df[col] = [default() if callable(default) else default]*len(df)
+
+    try:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    except Exception:
+        df["date"] = datetime.utcnow().strftime("%Y-%m-%d")
+
+    df["currency"] = df["currency"].fillna("RON")
+    df["category"] = df["category"].fillna("uncategorized")
+    df["ew"] = df["ew"].fillna("unknown")
+    return df[SCHEMA_COLS]
+
+def read_transactions(path: str = CSV_PATH) -> pd.DataFrame:
+    try:
+        base = pd.read_csv(path)
+    except FileNotFoundError:
+        base = pd.DataFrame(columns=SCHEMA_COLS)
+    return _ensure_columns(base)
+
+def write_transactions(df: pd.DataFrame, path: str = CSV_PATH) -> None:
+    df = _ensure_columns(df)
+    df.to_csv(path, index=False)
+
+def append_transactions(new_rows: pd.DataFrame, path: str = CSV_PATH) -> pd.DataFrame:
+    base = read_transactions(path)
+    nr = _ensure_columns(new_rows)
+    all_rows = pd.concat([base, nr], ignore_index=True)
+    # dedupe by (date, merchant, amount, currency)
+    all_rows.drop_duplicates(subset=["date","merchant","amount","currency"], keep="first", inplace=True)
+    write_transactions(all_rows, path)
+    return all_rows
+
+def flag_internal_transfers(df: pd.DataFrame, minutes_window=1440) -> pd.DataFrame:
+    """Marchează perechi +/− cu aceeași sumă ca transfer intern (exclude din totaluri)."""
+    if df.empty: 
+        return df
+    d = df.copy()
+    d["abs_amt"] = d["amount"].abs().round(2)
+    d["dt"] = pd.to_datetime(d["date"], errors="coerce")
+
+    pos = d[d["amount"] > 0]
+    neg = d[d["amount"] < 0]
+    if pos.empty or neg.empty:
+        d.drop(columns=["abs_amt","dt"], errors="ignore", inplace=True)
+        return d
+
+    pairs = pos.merge(neg, on=["abs_amt","currency"], suffixes=("_p","_n"))
+    ok = (pairs["dt_p"] - pairs["dt_n"]).abs().dt.total_seconds().abs() <= minutes_window*60
+    ids = set(pairs.loc[ok, "id_p"]).union(set(pairs.loc[ok, "id_n"]))
+
+    if ids:
+        d.loc[d["id"].isin(ids), "source"] = "transfer-internal"
+    d.drop(columns=["abs_amt","dt"], errors="ignore", inplace=True)
+    return d
+
+# OCR line parser:  "NumeProdus 12,50"
+LINE_RE = re.compile(r"^\s*(.+?)\s+([0-9]+(?:[.,][0-9]{1,2})?)\s*$", re.IGNORECASE)
+def parse_receipt_text(text: str) -> pd.DataFrame:
+    rows = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith(("total","suma","sumă","tva")):
+            continue
+        m = LINE_RE.match(line)
+        if not m:
+            continue
+        name, price = m.group(1), m.group(2)
+        price = float(price.replace(",", "."))
+        rows.append({
+            "merchant": name[:50],
+            "amount": -price,           # negativ = cheltuială
+            "currency": "RON",
+            "category":"uncategorized",
+            "notes":"",
+            "source":"ocr-receipt",
+            "ew":"unknown",
+            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "id": uuid.uuid4().hex[:10],
+        })
+    return _ensure_columns(pd.DataFrame(rows)) if rows else pd.DataFrame(columns=SCHEMA_COLS)
 # --- CONSTANTE & PATHS DE BAZĂ (trebuie să fie DEFINITE ÎNAINTE de init_user_csv!) ---
 BASE = Path(__file__).resolve().parent
 # CSV_PATH preserved from init_user_csv(user)
