@@ -923,38 +923,30 @@ with tabs[0]:
 
             except Exception as e:
                 st.error(f"Eroare OCR: {e} — verifică Tesseract.")
-
-    with col2:
-        st.subheader("Adăugare rapidă (o singură sumă)")
-        defaults = {"merchant":"", "date":date.today().isoformat(), "amount":0.0}
-        if "ocr_suggestion" in locals() and ocr_suggestion.get("amount"):
-            defaults = ocr_suggestion
-        with st.form("exp_form_single", clear_on_submit=True):
-            merchant = st.text_input("Comerciant", value=defaults["merchant"])
-            try:
-                d_default = pd.to_datetime(defaults["date"]).date()
-            except Exception:
-                d_default = date.today()
-            dt_in = st.date_input("Data", value=d_default, key="date_single")
-            amount = st.number_input("Sumă totală (RON)", min_value=0.0, step=0.1, format="%.2f", value=float(defaults["amount"]) )
-            category = st.text_input("Categorie (dacă vrei totul într-una)", value="Uncategorized")
-            notes = st.text_input("Notițe", placeholder="ex: fără detaliere pe linii")
-            submitted = st.form_submit_button("💾 Salvează o singură tranzacție")
-            if submitted:
-                row = {
-                    "id": uuid.uuid4().hex[:12],
-                    "date": dt_in.isoformat(),
-                    "merchant": merchant.strip() or "Unknown",
-                    "amount": -abs(float(amount)),
-                    "currency": "RON",
-                    "category": category.strip() or "Uncategorized",
-                    "notes": notes if notes else ("OCR total" if "ocr_suggestion" in locals() and ocr_suggestion.get("amount") else "manual"),
-                    "source": "ocr-total" if "ocr_suggestion" in locals() and ocr_suggestion.get("amount") else "manual-expense",
-                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                append_row(row)
-                st.success("Cheltuială salvată ✔")
-
+ # ==== PATCH 2: QUICK ADD EXPENSE (place in the Expenses page section) ====
+st.subheader("Adăugare rapidă (o singură sumă)")
+with st.form("quick_expense", clear_on_submit=True):
+    merch = st.text_input("Comerciant", placeholder="Ex: Supermarket")
+    d = st.date_input("Data", value=_date.today())
+    total = st.number_input("Sumă totală (RON)", min_value=0.0, step=1.0, format="%.2f")
+    cat = st.text_input("Categorie (opțional)", value="uncategorized")
+    notes = st.text_input("Notițe", placeholder="ex: fără detaliere pe linii")
+    ok = st.form_submit_button("💾 Salvează o singură tranzacție")
+    if ok:
+        row = pd.DataFrame([{
+            "merchant": merch or "Expense",
+            "date": d.strftime("%Y-%m-%d"),
+            "amount": -float(total),   # negativ
+            "currency": "RON",
+            "category": cat or "uncategorized",
+            "notes": notes,
+            "source":"manual-expense",
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "ew":"unknown",
+            "id": uuid.uuid4().hex[:10],
+        }])
+        append_transactions(row, CSV_PATH)
+        st.success("Cheltuială salvată ✓")
     st.divider()
     tx_local = load_tx()
     if not tx_local.empty:
@@ -963,7 +955,35 @@ with tabs[0]:
         st.dataframe(recent_exp, use_container_width=True)
     else:
         st.info("Nu există încă tranzacții.")
+# === OCR din bon – în aceeași pagină cu Cheltuieli ===
+st.divider()
+st.subheader("🧾 Adaugă cheltuieli din bon (OCR)")
 
+img = st.file_uploader("Încarcă imagine (JPG/PNG/WEBP)", type=["png","jpg","jpeg","webp"], key="ocr_img")
+auto = st.checkbox("Activează Auto-extragere din bon (OCR)", value=True, key="ocr_auto")
+if img and auto:
+    try:
+        import pytesseract
+        from PIL import Image
+        im = Image.open(img)
+        text = pytesseract.image_to_string(im, lang="ron+eng")
+    except Exception as e:
+        # Fallback dacă pytesseract nu e instalat pe server
+        st.warning(f"OCR indisponibil aici: {e}")
+        text = ""
+
+    st.text_area("Text extras (debug)", value=text, height=160)
+
+    items = parse_receipt_text(text)  # vine din Patch 1
+    if items.empty:
+        st.warning("Nu am găsit linii clare. Completează manual sau folosește Adăugare rapidă.")
+    else:
+        st.success(f"Am detectat {len(items)} linii din bon 👇")
+        st.dataframe(items[["merchant","amount","category","ew"]], use_container_width=True)
+
+        if st.button(f"💾 Confirmă & salvează toate cele {len(items)} linii", key="save_ocr"):
+            append_transactions(items, CSV_PATH)  # din Patch 1
+            st.success("Liniile din bon au fost salvate ✓")
 # ===== TAB 2: Income =====
 with tabs[1]:
     st.header("💰 Adaugă Venit")
@@ -1088,73 +1108,70 @@ with tabs[2]:
 
 # ===== TAB 4: Import Money Manager =====
 with tabs[3]:
-    st.header("📥 Import din Money Manager (CSV)")
-    up = st.file_uploader("Alege fișierul CSV exportat", type=["csv"], key="mm_csv")
+    st.header("📥 Import din Money Manager / ING / Revolut (CSV)")
+
+    up = st.file_uploader("Alege fișierul CSV exportat", type=["csv"], key="csv_import")
+
     colA, colB, colC = st.columns(3)
-    with colA: currency = st.text_input("Monedă", value="RON")
-    with colB: assume_expense = st.checkbox("Consideră toate ca cheltuieli dacă nu există Type", value=False)
-    with colC: date_fmt = st.selectbox("Format dată", ["Auto (DMY)", "DMY", "MDY", "YMD"], index=0)
+    with colA:
+        currency = st.selectbox("Monedă", ["RON","EUR","USD"], index=0)
+    with colB:
+        assume_expense = st.checkbox(
+            "Consideră TOATE ca cheltuieli dacă lipsește semnul/Tipul",
+            value=False
+        )
+    with colC:
+        date_fmt = st.selectbox("Format dată", ["Auto (DMY)", "DMY", "MDY", "YMD"], index=0)
+
+    def _parse_dates_iso(series: pd.Series, fmt: str) -> pd.Series:
+        # DMY: zi/lună/an  |  MDY: lună/zi/an  |  YMD: an-lună-zi
+        if fmt == "DMY":
+            return pd.to_datetime(series, errors="coerce", dayfirst=True)
+        if fmt == "MDY":
+            return pd.to_datetime(series, errors="coerce", dayfirst=False)
+        if fmt == "YMD":
+            # pentru stringuri gen 2025-10-27 sau 2025/10/27
+            return pd.to_datetime(series, errors="coerce", format="mixed")
+        # Auto (DMY)
+        s = pd.to_datetime(series, errors="coerce", dayfirst=True)
+        # fallback dacă multe au ieșit NaT
+        if s.isna().mean() > 0.5:
+            s = pd.to_datetime(series, errors="coerce", dayfirst=False)
+        return s
 
     if up is not None:
         try:
-            raw = up.read(); df = read_csv_auto_bytes(raw)
-            st.caption("Previzualizare CSV (primele 10 rânduri)")
-            st.dataframe(df.head(10), use_container_width=True)
-
-            cols_norm = [c.strip().lower() for c in df.columns]
-            def pick(cands):
-                for c in cands:
-                    if c in cols_norm: return df.columns[cols_norm.index(c)]
-                return None
-
-            col_date   = pick(["date","data","transaction date","period"])
-            col_amount = pick(["amount","sum","value","ron"])
-            col_type   = pick(["type","transaction type","income/expense","income expense"])
-            col_cat    = pick(["category","categorie"])
-            col_note   = pick(["note","memo","remarks","description"])
-            col_merch  = pick(["merchant","payee","store","name"])
-
-            if not col_date or not col_amount:
-                st.error("CSV-ul trebuie să conțină cel puțin coloanele Date/Period și Amount/RON.")
-            else:
-                hint = None if date_fmt.startswith("Auto") else date_fmt
-                parsed_dates = parse_date_series(df[col_date], hint)
-                amounts = parse_amount_series(df[col_amount])
-
-                if col_type:
-                    txt = df[col_type].astype(str).map(normalize_text).str.replace(r"[^a-z]+","", regex=True)
-                    exp_mask = txt.str.contains(r"^exp|expense|chelt|debit|out|spend", regex=True, na=False)
-                    inc_mask = txt.str.contains(r"^inc|income|venit|credit|in|earn", regex=True, na=False)
-                    sign = np.where(exp_mask, -1, np.where(inc_mask, 1, np.sign(amounts).replace(0, 1)))
-                else:
-                    sign = -1 if assume_expense else np.sign(amounts).replace(0, 1)
-
-                final_amount = (amounts.abs() * sign).round(2)
-                merch = df[col_merch].fillna("").replace("", "Money Manager") if col_merch else "Money Manager"
-                cat = df[col_cat] if col_cat else ""
-                note = df[col_note] if col_note else ""
-
-                out = pd.DataFrame({
-                    "id": [f"mm{str(i).zfill(8)}" for i in range(len(df))],
-                    "date": parsed_dates.dt.date.astype(str),
-                    "merchant": merch,
-                    "amount": final_amount,
-                    "currency": currency,
-                    "category": cat,
-                    "notes": note,
-                    "source": "import-moneymanager",
-                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                out = out[pd.to_datetime(out["date"], errors="coerce").notna() & out["amount"].notna()]
-
-                st.write(f"Rânduri valide pentru import: **{len(out)}**")
-                if len(out) > 0 and st.button("✅ Importă în transactions.csv"):
-                    append_rows(out)
-                    st.success(f"Am importat {len(out)} rânduri ✔")
-                    st.balloons()
+            raw_df = pd.read_csv(up)
         except Exception as e:
             st.error(f"Eroare la citirea CSV: {e}")
+        else:
+            # 1) Normalizează coloanele la schema noastră
+            norm = _ensure_columns(raw_df)
 
+            # 2) Aplică opțiunile de UI
+            norm["currency"] = currency
+
+            # Dată → ISO, dacă utilizatorul a ales un format explicit
+            chosen = None if date_fmt.startswith("Auto") else date_fmt
+            if chosen:
+                parsed = _parse_dates_iso(norm["date"], chosen)
+            else:
+                parsed = _parse_dates_iso(norm["date"], "DMY")
+            norm["date"] = parsed.dt.strftime("%Y-%m-%d")
+            norm = norm[pd.to_datetime(norm["date"], errors="coerce").notna()]  # aruncă rândurile fără dată validă
+
+            # Dacă lipsește semnul în fișier și vrei forțat cheltuieli
+            if assume_expense:
+                norm.loc[norm["amount"] > 0, "amount"] *= -1
+
+            # 3) Previzualizare
+            st.caption("Previzualizare CSV (primele 10 rânduri normalizate)")
+            st.dataframe(norm.head(10), use_container_width=True)
+
+            st.write(f"Rânduri pregătite pentru import: **{len(norm)}**")
+            if len(norm) > 0 and st.button("✅ Importă în transactions.csv", key="btn_import_csv"):
+                append_transactions(norm, CSV_PATH)
+                st.success(f"Am importat {len(norm)} rânduri ✔")
 # ===== TAB 5: Editare tranzacții =====
 with tabs[4]:
     st.header("🧹 Editare / ștergere tranzacții")
@@ -1222,9 +1239,6 @@ with tabs[4]:
                 overwrite_tx(deduped)
                 st.success(f"Am eliminat {removed} duplicate.")
                 st.rerun()
-
-
-
 # ==================== AI FINANCE STRATEGY (Lightweight) ====================
 ESSENTIAL_CATS = {
     "Groceries": "essential",
@@ -1388,10 +1402,6 @@ def suggest_strategy(inp: StrategyInput) -> StrategyResult:
         }
     }
     return StrategyResult(allocations=df_alloc, narrative=narrative, diagnostics=diags)
-
-
-
-
 # ==================== UI: AI Strategy (beta) ====================
 try:
     _tx_exists = tx is not None
@@ -1432,11 +1442,60 @@ if st.button("Generează strategie"):
         max_wants_pct=_max_wants_pct,
         prefer_emergency_first=_prefer_ef_first,
     )
-    _res = suggest_strategy(_si)
-    st.markdown("#### Recomandări")
-    st.write(_res.narrative)
-    st.markdown("#### Alocări propuse")
-    st.dataframe(_res.allocations, use_container_width=True)
-    with st.expander("Diagnostic (detalii)"):
-        st.json(_res.diagnostics)
+# ==== PATCH 5: AI STRATEGY (no KeyError) ====
+st.header("AI Strategy (beta)")
+
+df_all = read_transactions(CSV_PATH)
+df_all = _ensure_columns(df_all)          # garantează 'ew'
+df_all = flag_internal_transfers(df_all)  # nu includem transferuri
+
+df_calc = df_all[df_all["source"] != "transfer-internal"]
+total_income = df_calc.loc[df_calc["amount"] > 0, "amount"].sum()
+total_exp    = -df_calc.loc[df_calc["amount"] < 0, "amount"].sum()
+
+col1,col2,col3 = st.columns(3)
+with col1:
+    venit_next = st.number_input("Venit luna următoare (lei)", value=20000.0, step=100.0)
+with col2:
+    chirie = st.number_input("Chirie (lei)", value=2500.0, step=50.0)
+with col3:
+    fond_exist = st.number_input("Fond urgență existent (lei)", value=0.0, step=100.0)
+
+col1,col2,col3 = st.columns(3)
+with col1:
+    tinta_fond_luni = st.slider("Țintă fond urgență (luni)", 0, 12, 3)
+with col2:
+    rata_credit = st.number_input("Rată credit (lei)", value=1585.0, step=50.0)
+with col3:
+    ramb_anticip = st.number_input("Rambursare anticipată/lună (lei)", value=0.0, step=100.0)
+
+ec_min = st.slider("Economii minime (% din venit)", 0, 50, 10)
+wants_cap = st.slider("Plafon cheltuieli wants (% din venit)", 0, 80, 30)
+prioritize_ef = st.checkbox("Prioritizează fondul de urgență înaintea investițiilor", value=True)
+
+if st.button("⚙️ Generează strategie"):
+    # cifre rapide
+    venit_net = venit_next
+    needs = chirie + rata_credit
+    wants = venit_net * wants_cap/100
+    economii_min = venit_net * ec_min/100
+    liber = venit_net - (needs + wants)
+    # fond de urgență țintă (luni * cheltuieli lunare esențiale)
+    esential_hist = -df_calc[(df_calc["amount"] < 0) & (df_calc["ew"] == "essential")]["amount"].sum()
+    # fallback dacă nu există marcare 'essential'
+    if esential_hist <= 0:
+        esential_hist = total_exp * 0.6  # estimare 60% esențiale
+    tinta_fond = max(0.0, (esential_hist / max(1, len(df_calc))) * 30 * tinta_fond_luni)  # aproximare
+    lipsa_fond = max(0.0, tinta_fond - fond_exist)
+
+    alocare_fond = min(liber, lipsa_fond) if prioritize_ef else 0.0
+    alocare_ramb = min(liber - alocare_fond, ramb_anticip)
+    investitii = max(0.0, liber - alocare_fond - alocare_ramb - economii_min)
+
+    st.success("Strategie generată ✓")
+    st.write(f"- **Needs**: {needs:,.0f} RON  |  **Wants** (cap): {wants:,.0f} RON")
+    st.write(f"- **Economii minime**: {economii_min:,.0f} RON  |  **Liber**: {liber:,.0f} RON")
+    st.write(f"- **Fond urgență țintă**: {tinta_fond:,.0f} (lipsă {lipsa_fond:,.0f})")
+    st.write(f"- Alocare lună curentă → **Fond urgență**: {alocare_fond:,.0f}, **Rambursare anticipată**: {alocare_ramb:,.0f}, **Investiții**: {investitii:,.0f}")
+
 
