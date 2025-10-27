@@ -13,6 +13,7 @@ Funcționalități:
 """
 
 # ================== IMPORTURI ==================
+from __future__ import annotations
 import streamlit as st
 st.set_page_config(page_title="Budget OCR + AI", layout="wide")
 import joblib
@@ -49,7 +50,6 @@ import os
 import requests
 from pathlib import Path  # <- asigură-te că importul există
 # ==== PATCH 1: imports + helpers (TOP of app.py) ====
-from __future__ import annotations
 import uuid, re
 from datetime import datetime, date as _date
 import pandas as pd
