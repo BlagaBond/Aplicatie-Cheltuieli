@@ -1403,99 +1403,313 @@ def suggest_strategy(inp: StrategyInput) -> StrategyResult:
     }
     return StrategyResult(allocations=df_alloc, narrative=narrative, diagnostics=diags)
 # ==================== UI: AI Strategy (beta) ====================
-try:
-    _tx_exists = tx is not None
-except Exception:
-    try:
-        tx = load_tx()
-    except Exception:
-        tx = pd.DataFrame(columns=["id","date","merchant","amount","currency","category","notes","source","created_at"])
-
+# ==================== PLANIFICARE BUGETARĂ ====================
 st.markdown("---")
-st.header("AI Strategy (beta)")
+st.header("💡 Strategie Bugetară")
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    _income_next = st.number_input("Venit luna următoare (lei)", min_value=0.0, value=20000.0, step=100.0)
-    _ef_target_months = st.slider("Țintă fond urgență (luni)", 1, 12, 3)
-with c2:
-    _rent = st.number_input("Chirie (lei)", min_value=0.0, value=2500.0, step=50.0)
-    _loan = st.number_input("Rată credit (lei)", min_value=0.0, value=1585.0, step=50.0)
-with c3:
-    _ef_current = st.number_input("Fond urgență existent (lei)", min_value=0.0, value=0.0, step=100.0)
-    _extra_debt = st.number_input("Rambursare anticipată/lună (lei)", min_value=0.0, value=0.0, step=50.0)
-
-_min_savings_pct = st.slider("Economii minime (% din venit)", 0, 50, 10) / 100.0
-_max_wants_pct = st.slider("Plafon cheltuieli wants (% din venit)", 0, 70, 30) / 100.0
-_prefer_ef_first = st.checkbox("Prioritizează fondul de urgență înaintea investițiilor", value=True)
-
-if st.button("Generează strategie"):
-    _si = StrategyInput(
-        df=tx.copy(),
-        income_next=_income_next,
-        rent=_rent,
-        loan=_loan,
-        ef_target_months=_ef_target_months,
-        ef_current=_ef_current,
-        extra_debt_payment=_extra_debt,
-        min_savings_pct=_min_savings_pct,
-        max_wants_pct=_max_wants_pct,
-        prefer_emergency_first=_prefer_ef_first,
-    )
-# ==== PATCH 5: AI STRATEGY (no KeyError) ====
-st.header("AI Strategy (beta)")
-
-df_all = read_transactions(CSV_PATH)
-df_all = _ensure_columns(df_all)          # garantează 'ew'
-df_all = flag_internal_transfers(df_all)  # nu includem transferuri
-
+# 1. Analiza lunii anterioare
+# Încărcăm toate tranzacțiile și filtrăm transferurile interne
+try:
+    df_all = load_tx()
+except Exception:
+    df_all = pd.DataFrame(columns=SCHEMA_COLS)
+df_all = df_all.copy()
+df_all = flag_internal_transfers(df_all)
 df_calc = df_all[df_all["source"] != "transfer-internal"]
-total_income = df_calc.loc[df_calc["amount"] > 0, "amount"].sum()
-total_exp    = -df_calc.loc[df_calc["amount"] < 0, "amount"].sum()
 
-col1,col2,col3 = st.columns(3)
+# Dacă nu există tranzacții, afișăm un mesaj și oprim secțiunea
+if df_calc.empty:
+    st.info("Nu există tranzacții pentru analiză.")
+else:
+    # Asigurăm că avem coloana 'ew' (essential/wants) pe baza categoriei
+    if "ew" not in df_calc.columns:
+        def classify_ew(cat: str) -> str:
+            if not isinstance(cat, str):
+                return "unknown"
+            return ESSENTIAL_CATS.get(cat, "unknown")
+        df_calc["ew"] = df_calc["category"].apply(classify_ew)
+
+    # Determinăm luna completă anterioară (year-month)
+    today = date.today()
+    # luna trecută: dacă luna curentă e ianuarie, mergem la decembrie anul precedent
+    if today.month == 1:
+        last_month_year = today.year - 1
+        last_month_mon = 12
+    else:
+        last_month_year = today.year
+        last_month_mon = today.month - 1
+    last_month_str = f"{last_month_year}-{last_month_mon:02d}"
+
+    # Filtrăm tranzacțiile pentru luna precedentă completă
+    df_last_month = df_calc[df_calc["date"].astype(str).str.startswith(last_month_str)]
+    # Calculăm venitul, cheltuieli totale și pe categorii esențiale/wants pentru luna trecută
+    total_income_last = df_last_month[df_last_month["amount"] > 0]["amount"].sum()
+    total_expense_last = -df_last_month[df_last_month["amount"] < 0]["amount"].sum()
+    essential_last = -df_last_month[(df_last_month["amount"] < 0) & (df_last_month["ew"] == "essential")]["amount"].sum()
+    wants_last = -df_last_month[(df_last_month["amount"] < 0) & (df_last_month["ew"] == "wants")]["amount"].sum()
+    # Economii = venitul minus cheltuieli (dacă pozitiv, altfel deficit)
+    savings_last = total_income_last - total_expense_last
+
+    # Identificăm cheltuieli recurente (apărute în ultimele 3 luni consecutiv)
+    recurring_items = []  # list of (merchant, category, amount_last_month)
+    if not df_last_month.empty:
+        # determinăm year-month pentru ultimele 3 luni
+        from datetime import datetime
+        # Folosim datetime pentru a calcula lunile precedente
+        first_day_last_month = datetime(last_month_year, last_month_mon, 1)
+        # Luna anterioară ultimei
+        prev_month_date = first_day_last_month.replace(day=1)
+        # Handle edge case for January again using date arithmetic
+        import calendar
+        last_day_prev_month = first_day_last_month.replace(day=1) - pd.Timedelta(days=1)
+        prev_month_year = last_day_prev_month.year
+        prev_month_mon = last_day_prev_month.month
+        # Și luna dinaintea ei
+        last_day_prev2 = last_day_prev_month.replace(day=1) - pd.Timedelta(days=1)
+        prev2_year = last_day_prev2.year
+        prev2_mon = last_day_prev2.month
+        ym_last = f"{last_month_year}-{last_month_mon:02d}"
+        ym_prev = f"{prev_month_year}-{prev_month_mon:02d}"
+        ym_prev2 = f"{prev2_year}-{prev2_mon:02d}"
+
+        # Grupăm tranzacțiile pe merchant pentru cheltuieli (amount < 0)
+        df_expenses = df_calc[df_calc["amount"] < 0].copy()
+        df_expenses["_ym"] = df_expenses["date"].astype(str).str.slice(0, 7)  # YYYY-MM
+        for merchant, grp in df_expenses.groupby("merchant"):
+            if merchant == "" or merchant is None:
+                continue  # ignorăm merchant nespecificat
+            months = set(grp["_ym"].unique())
+            if ym_last in months and ym_prev in months and ym_prev2 in months:
+                # calculăm suma cheltuită la acest merchant în luna precedentă
+                last_month_amount = -grp[grp["_ym"] == ym_last]["amount"].sum()
+                if last_month_amount > 0:
+                    # determinăm categoria (folosim prima categorie din grup)
+                    cat = str(grp.iloc[0]["category"]) if "category" in grp.columns else ""
+                    recurring_items.append((merchant, cat, last_month_amount))
+
+    # Afișăm analiza lunii precedente
+    st.subheader("Analiza lunii precedente")
+    month_name_ro = {1:"Ianuarie",2:"Februarie",3:"Martie",4:"Aprilie",5:"Mai",6:"Iunie",
+                     7:"Iulie",8:"August",9:"Septembrie",10:"Octombrie",11:"Noiembrie",12:"Decembrie"}
+    pretty_month = f"{month_name_ro.get(last_month_mon, last_month_mon)} {last_month_year}"
+    # Rezumat venit/cheltuieli
+    if savings_last >= 0:
+        st.write(f"În **{pretty_month}**: Venit **{total_income_last:,.0f}** RON, "
+                 f"Cheltuieli esențiale **{essential_last:,.0f}** RON, "
+                 f"Cheltuieli \"wants\" **{wants_last:,.0f}** RON, "
+                 f"Economii **{savings_last:,.0f}** RON.")
+    else:
+        st.write(f"În **{pretty_month}**: Venit **{total_income_last:,.0f}** RON, "
+                 f"Cheltuieli esențiale **{essential_last:,.0f}** RON, "
+                 f"Cheltuieli \"wants\" **{wants_last:,.0f}** RON, "
+                 f"Deficit **{-savings_last:,.0f}** RON (cheltuieli > venit).")
+
+    # Listăm cheltuielile recurente identificate
+    if recurring_items:
+        st.write("Cheltuieli recurente identificate în ultimele 3 luni:")
+        for merchant, cat, amt in recurring_items:
+            st.write(f"- **{merchant}** ({cat}) ~ {amt:,.0f} RON/lună")
+    else:
+        st.write("Nu s-au identificat cheltuieli recurente (fixe) în mod consecvent pe 3 luni.")
+
+    # Estimare total cheltuieli fixe recurente pentru luna curentă
+    if recurring_items:
+        total_recur = sum(item[2] for item in recurring_items)
+        st.write(f"Estimare cheltuieli fixe recurente lună curentă: **{total_recur:,.0f} RON**.")
+    else:
+        st.write("Estimare cheltuieli fixe recurente lună curentă: **0 RON** (niciun cost recurent detectat).")
+
+# 2. Inputuri pentru utilizator
+st.subheader("Parametrii planificării viitoare")
+col1, col2, col3 = st.columns(3)
 with col1:
-    venit_next = st.number_input("Venit luna următoare (lei)", value=20000.0, step=100.0)
+    income_next = st.number_input("Venit estimat luna viitoare (RON)", min_value=0.0, value=0.0, step=100.0)
 with col2:
-    chirie = st.number_input("Chirie (lei)", value=2500.0, step=50.0)
+    ef_current = st.number_input("Fond de urgență disponibil (RON)", min_value=0.0, value=0.0, step=100.0)
 with col3:
-    fond_exist = st.number_input("Fond urgență existent (lei)", value=0.0, step=100.0)
+    ef_target_months = st.slider("Țintă fond de urgență (luni)", 1, 12, 3)
 
-col1,col2,col3 = st.columns(3)
+col1, col2, col3 = st.columns(3)
 with col1:
-    tinta_fond_luni = st.slider("Țintă fond urgență (luni)", 0, 12, 3)
+    rent = st.number_input("Chirie (RON)", min_value=0.0, value=0.0, step=50.0)
 with col2:
-    rata_credit = st.number_input("Rată credit (lei)", value=1585.0, step=50.0)
+    loan = st.number_input("Rată credit (RON)", min_value=0.0, value=0.0, step=50.0)
 with col3:
-    ramb_anticip = st.number_input("Rambursare anticipată/lună (lei)", value=0.0, step=100.0)
+    extra_debt = st.number_input("Sumă rambursare anticipată credit (RON)", min_value=0.0, value=0.0, step=50.0)
 
-ec_min = st.slider("Economii minime (% din venit)", 0, 50, 10)
-wants_cap = st.slider("Plafon cheltuieli wants (% din venit)", 0, 80, 30)
-prioritize_ef = st.checkbox("Prioritizează fondul de urgență înaintea investițiilor", value=True)
+col1, col2, col3 = st.columns([2,1,1])
+with col1:
+    save_pct = st.slider("Procent economii & investiții din venit (%)", 0, 50, 20)
+with col2:
+    extra_fixed = st.number_input("Cheltuieli fixe extra (RON)", min_value=0.0, value=0.0, step=50.0)
+with col3:
+    prefer_ef_first = st.checkbox("Prioritizează fondul de urgență", value=True)
 
+# 3. Generarea strategiei AI / logică complexă
 if st.button("⚙️ Generează strategie"):
-    # cifre rapide
-    venit_net = venit_next
-    needs = chirie + rata_credit
-    wants = venit_net * wants_cap/100
-    economii_min = venit_net * ec_min/100
-    liber = venit_net - (needs + wants)
-    # fond de urgență țintă (luni * cheltuieli lunare esențiale)
-    esential_hist = -df_calc[(df_calc["amount"] < 0) & (df_calc["ew"] == "essential")]["amount"].sum()
-    # fallback dacă nu există marcare 'essential'
-    if esential_hist <= 0:
-        esential_hist = total_exp * 0.6  # estimare 60% esențiale
-    tinta_fond = max(0.0, (esential_hist / max(1, len(df_calc))) * 30 * tinta_fond_luni)  # aproximare
-    lipsa_fond = max(0.0, tinta_fond - fond_exist)
+    # Calculăm nevoile (essentials) lunare anticipate
+    # Suma cheltuielilor esențiale variabile lunare (folosim luna trecută ca referință)
+    var_essential_month = float(essential_last if 'essential_last' in locals() and essential_last > 0 else 0.0)
+    # Dacă nu există marcaj essential, estimăm ~60% din cheltuieli totale ca esențiale
+    if var_essential_month <= 0 and 'total_expense_last' in locals():
+        var_essential_month = float(total_expense_last) * 0.6 if total_expense_last > 0 else 0.0
 
-    alocare_fond = min(liber, lipsa_fond) if prioritize_ef else 0.0
-    alocare_ramb = min(liber - alocare_fond, ramb_anticip)
-    investitii = max(0.0, liber - alocare_fond - alocare_ramb - economii_min)
+    # Cheltuieli fixe recurente detectate (excluzând chirie și rata credit deja introduse)
+    detected_fixed = 0.0
+    for (merchant, cat, amt) in (recurring_items if 'recurring_items' in locals() else []):
+        # omităm chiria și creditul dacă apar în istoricul tranzacțiilor
+        if cat.lower() in ["housing"] or "chirie" in merchant.lower():
+            continue  # chiria este introdusă manual
+        if cat.lower() in ["loan", "credit", "rate"] or "credit" in merchant.lower():
+            continue  # rata credit introdusă manual
+        detected_fixed += float(amt)
+    # Nevoile fixe = chirie + rata credit + cheltuieli fixe extra (manual) + detectate automat
+    fixed_needs = float(rent + loan + extra_fixed + detected_fixed)
+    # Nevoile esențiale totale = nevoile fixe + esențiale variabile (estimate după luna trecută)
+    baseline_needs = fixed_needs + var_essential_month
+    # Venit net planificat și surplus inițial (bani disponibili după acoperirea nevoilor esențiale)
+    income = float(income_next)
+    surplus = max(0.0, income - baseline_needs)
 
+    # Calcul plafon pentru wants: implicit 30% din venit sau cât permite surplusul
+    max_wants = 0.30 * income
+    # Dacă surplusul nu acoperă 30%, atunci tot surplusul se consideră pentru wants (fără economii)
+    planned_wants = min(max_wants, surplus)
+    if surplus - planned_wants < 0:
+        planned_wants = max(0.0, surplus)
+    # Surplus după wants (bani rămași de alocat către economii/investiții/debt)
+    surplus_after_wants = max(0.0, surplus - planned_wants)
+
+    # Ținta fond de urgență în RON (luni * cheltuieli esențiale lunare medii)
+    # Folosim cheltuielile esențiale lunare estimate (baseline_needs fără wants)
+    monthly_essential_cost = baseline_needs  # considerăm toate nevoile ca necesare lunar
+    ef_target_amount = ef_target_months * monthly_essential_cost
+    ef_gap = max(0.0, ef_target_amount - ef_current)
+
+    # Procent dorit economii
+    min_savings = save_pct/100.0 * income
+
+    # Alocări inițiale
+    remaining = surplus_after_wants
+    alloc_ef = 0.0
+    alloc_inv = 0.0
+    alloc_debt = 0.0
+
+    # Alocare rambursare anticipată (se scade întâi, considerată "fixă" dacă utilizatorul a setat-o)
+    if remaining > 0:
+        alloc_debt = min(extra_debt, remaining)
+        remaining -= alloc_debt
+
+    # Alocare fond de urgență
+    if remaining > 0:
+        if prefer_ef_first:
+            # Alocăm cât putem către EF (prioritar), dar nu luăm din suma pentru debt deja alocată
+            alloc_ef = min(remaining, ef_gap)
+            remaining -= alloc_ef
+        else:
+            # Fără prioritate EF: alocăm jumătate din ce rămâne (sau cât e necesar) către EF
+            half = remaining / 2.0
+            alloc_ef = min(half, ef_gap)
+            remaining -= alloc_ef
+            # restul de remaining va fi investit inițial (calculat mai jos)
+
+    # Alocare economii vs investiții
+    alloc_savings = 0.0
+    alloc_inv = 0.0
+    if remaining > 0:
+        if remaining >= min_savings:
+            # Păstrăm procentul minim ca economii cash, restul investim
+            alloc_savings = min_savings
+            alloc_inv = remaining - alloc_savings
+        else:
+            # Surplusul rămas e sub ținta de economisire -> îl păstrăm integral ca economii, nimic la investiții
+            alloc_savings = remaining
+            alloc_inv = 0.0
+        remaining = 0.0
+
+    # Notă: dacă există surplus nealocat (remaining > 0) după aceste etape, îl lăsăm implicit ca economie suplimentară
+    if remaining > 0:
+        alloc_savings += remaining
+        remaining = 0.0
+
+    # 4. Prezentarea rezultatului în UI
     st.success("Strategie generată ✓")
-    st.write(f"- **Needs**: {needs:,.0f} RON  |  **Wants** (cap): {wants:,.0f} RON")
-    st.write(f"- **Economii minime**: {economii_min:,.0f} RON  |  **Liber**: {liber:,.0f} RON")
-    st.write(f"- **Fond urgență țintă**: {tinta_fond:,.0f} (lipsă {lipsa_fond:,.0f})")
-    st.write(f"- Alocare lună curentă → **Fond urgență**: {alocare_fond:,.0f}, **Rambursare anticipată**: {alocare_ramb:,.0f}, **Investiții**: {investitii:,.0f}")
 
+    # Tabel de alocare propusă
+    allocations = []
+    if alloc_ef > 0:
+        allocations.append(["Fond de urgență", f"{alloc_ef:,.0f}"])
+    if alloc_debt > 0:
+        allocations.append(["Rambursare credit", f"{alloc_debt:,.0f}"])
+    if alloc_inv > 0:
+        allocations.append(["Investiții", f"{alloc_inv:,.0f}"])
+    if alloc_savings > 0:
+        allocations.append(["Economii", f"{alloc_savings:,.0f}"])
+    if not allocations:
+        allocations.append(["(Nicio alocare - fără surplus)", "0"])
+
+    df_alloc = pd.DataFrame(allocations, columns=["Destinație", "Sumă (lei)"])
+    st.table(df_alloc)
+
+    # Explicații în propoziții clare pentru decizii
+    explanations = []
+    # Fond de urgență
+    if ef_gap > 0:
+        percent_ef = (ef_current / ef_target_amount * 100) if ef_target_amount > 0 else 100
+        percent_ef = min(100, percent_ef)
+        if alloc_ef > 0:
+            explanations.append(f"Fondul de urgență e la {percent_ef:.0f}% din țintă. Alocăm {alloc_ef:,.0f} RON pentru a-l completa.")
+        else:
+            explanations.append(f"Fondul de urgență e la {percent_ef:.0f}% din țintă, însă nu alocăm fonduri suplimentare luna aceasta (surplus insuficient).")
+    else:
+        explanations.append("Fondul de urgență este deja la nivelul țintă; nu sunt necesare fonduri suplimentare.")
+
+    # Rambursare anticipată credit
+    if extra_debt > 0:
+        if alloc_debt >= extra_debt:
+            explanations.append(f"Alocăm {alloc_debt:,.0f} RON pentru rambursarea anticipată a creditului (conform planului).")
+        elif alloc_debt > 0:
+            explanations.append(f"Din cauza surplusului limitat, alocăm doar {alloc_debt:,.0f} RON din suma dorită pentru rambursarea anticipată a creditului.")
+        else:
+            explanations.append("Nu sunt fonduri disponibile pentru rambursare anticipată a creditului luna aceasta.")
+
+    # Investiții
+    if alloc_inv > 0:
+        if prefer_ef_first and ef_gap > 0:
+            explanations.append(f"După fondul de urgență, investim {alloc_inv:,.0f} RON din surplus.")
+        else:
+            explanations.append(f"Alocăm {alloc_inv:,.0f} RON către investiții din surplusul rămas.")
+    else:
+        explanations.append("Nu alocăm fonduri către investiții luna aceasta.")
+
+    # Economii
+    if alloc_savings > 0:
+        target_pct = save_pct
+        achieved_pct = (alloc_savings / income * 100) if income > 0 else 0
+        if alloc_savings >= min_savings:
+            explanations.append(f"Economisim {alloc_savings:,.0f} RON (~{achieved_pct:.0f}% din venit), conform obiectivului de economisire de {target_pct}% din venit.")
+        else:
+            explanations.append(f"Economisim {alloc_savings:,.0f} RON (~{achieved_pct:.0f}% din venit), sub ținta dorită de economisire ({target_pct}% din venit).")
+    else:
+        explanations.append("Nu rămâne niciun surplus pentru economii după alocările de mai sus.")
+
+    # Afișează explicațiile (listă de propoziții)
+    st.markdown("\n".join(f"- {line}" for line in explanations))
+
+    # Grafic de distribuție a banilor disponibili (pie chart)
+    try:
+        import altair as alt
+        # Pregătim datele pentru grafic (doar destinațiile cu sume > 0)
+        df_chart = df_alloc.copy()
+        df_chart["Sumă"] = df_chart["Sumă (lei)"].str.replace(",", "").astype(float)
+        df_chart = df_chart[df_chart["Sumă"] > 0]
+        if not df_chart.empty:
+            chart = alt.Chart(df_chart).mark_arc(innerRadius=50).encode(
+                theta=alt.Theta(field="Sumă", type="quantitative"),
+                color=alt.Color(field="Destinație", type="nominal", legend=alt.Legend(title="Destinație")),
+                tooltip=["Destinație", "Sumă (lei)"]
+            ).properties(width=400, height=400)
+            st.altair_chart(chart)
+    except Exception as e:
+        st.warning("Eroare la generarea graficului de distribuție.")
 
